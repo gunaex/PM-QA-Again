@@ -125,11 +125,13 @@ export const getCycleResultHistory = (slug, cycleId, resultId) =>
 // Evidence
 export const listEvidence = (slug, cycleId, resultId) =>
   api.get(`/${slug}/cycles/${cycleId}/results/${resultId}/evidence`).then((r) => r.data)
-export const uploadEvidence = (slug, cycleId, resultId, blob, { evidenceType, caption, filename }) => {
+export const uploadEvidence = (slug, cycleId, resultId, blob, { evidenceType, caption, filename, workflowRunId, workflowStepRunId }) => {
   const form = new FormData()
   form.append('file', blob, filename || 'evidence.png')
   form.append('evidence_type', evidenceType)
   if (caption) form.append('caption', caption)
+  if (workflowRunId != null) form.append('workflow_run_id', String(workflowRunId))
+  if (workflowStepRunId != null) form.append('workflow_step_run_id', String(workflowStepRunId))
   return api
     .post(`/${slug}/cycles/${cycleId}/results/${resultId}/evidence`, form, {
       headers: { 'Content-Type': 'multipart/form-data' },
@@ -227,6 +229,18 @@ export const queueWorkflowRun = (slug, workflowRevisionId, cycleTestResultId = n
     .then((r) => r.data)
 export const getWorkflowRun = (slug, runId) => api.get(`/${slug}/workflow-runs/${runId}`).then((r) => r.data)
 export const cancelWorkflowRun = (slug, runId) => api.post(`/${slug}/workflow-runs/${runId}/cancel`).then((r) => r.data)
+
+// Manual checkpoints (HYB-4)
+export const getCheckpointContext = (slug, runId, workflowStepId) =>
+  api.get(`/${slug}/workflow-runs/${runId}/checkpoint`, { params: { workflow_step_id: workflowStepId } }).then((r) => r.data)
+export const listCheckpointDecisions = (slug, runId, workflowStepId = null) =>
+  api
+    .get(`/${slug}/workflow-runs/${runId}/checkpoint-decisions`, { params: workflowStepId ? { workflow_step_id: workflowStepId } : {} })
+    .then((r) => r.data)
+export const submitCheckpointDecision = (slug, runId, payload) =>
+  api.post(`/${slug}/workflow-runs/${runId}/checkpoint-decision`, payload).then((r) => r.data)
+export const reviewCheckpointDecision = (slug, runId, decisionId, reviewStatus) =>
+  api.post(`/${slug}/workflow-runs/${runId}/checkpoint-decisions/${decisionId}/review`, { review_status: reviewStatus }).then((r) => r.data)
 
 // Runner tokens (HYB-2)
 export const listRunnerTokens = () => api.get('/runner-tokens').then((r) => r.data)

@@ -86,6 +86,8 @@ async def upload_evidence(
     evidence_type: str = Form("UPLOADED_IMAGE"),
     caption: str | None = Form(None),
     target_url: str | None = Form(None),
+    workflow_run_id: int | None = Form(None),
+    workflow_step_run_id: int | None = Form(None),
     file: UploadFile = File(...),
     db: Session = Depends(get_project_db),
     master_db: Session = Depends(get_master_db),
@@ -150,6 +152,16 @@ async def upload_evidence(
     # orphaned — compensate by deleting it, and say so distinctly rather
     # than returning a generic error a client might mistake for "nothing
     # happened, retry is free."
+    # HYB-4: a reviewer inspecting a checkpoint may attach evidence
+    # directly through this same endpoint (never a parallel one) --
+    # tagged with the run/step it belongs to. Loosely validated: only
+    # accepted when it actually matches the run this result is linked
+    # from, so a client can't mislabel evidence onto an unrelated run.
+    if workflow_run_id is not None:
+        run = db.query(models.WorkflowRun).filter(models.WorkflowRun.id == workflow_run_id).first()
+        if not run or run.cycle_test_result_id != result_id:
+            raise HTTPException(status_code=400, detail="workflow_run_id does not match this cycle result")
+
     safe_original_filename = _sanitize_filename(file.filename or "evidence")
     item = models.EvidenceItem(
         cycle_id=cycle_id,
@@ -163,6 +175,8 @@ async def upload_evidence(
         caption=caption,
         target_url=target_url,
         captured_by=user.email,
+        workflow_run_id=workflow_run_id,
+        workflow_step_run_id=workflow_step_run_id,
     )
     try:
         db.add(item)

@@ -30,7 +30,7 @@ from sqlalchemy.orm import Session
 from .. import models, schemas
 from ..database import get_project_db, get_master_db
 from ..evidence_utils import sniff_image, MAX_EVIDENCE_SIZE_BYTES
-from ..auth import get_current_user, require_tester, get_current_runner, _hash_token
+from ..auth import get_current_user, require_tester, require_admin, get_current_runner, _hash_token
 from ..quota import quota_status
 from ..storage import EvidenceStorage, get_evidence_storage
 
@@ -43,11 +43,20 @@ router = APIRouter(prefix="/api/{slug}/workflow-runs", tags=["workflow-runs"])
 
 
 def _expire_stale_leases(db: Session):
+    """Covers both the active-execution lease (WORKFLOW_RUN_LEASED_STATUSES,
+    60s) and the HYB-4 paused lease (WORKFLOW_RUN_PAUSED_LEASE_STATUSES,
+    300s) -- a runner that stops heartbeating while WAITING_FOR_HUMAN or
+    RESUMING is just as lost as one that stops mid-step, only on a
+    longer timeout. Either way this never touches an existing
+    WorkflowCheckpointDecision row -- if a human hadn't decided yet, none
+    exists; if one already exists (PASS -> RESUMING) it's left exactly as
+    recorded, immutable, and simply never gets acted on by a runner that
+    isn't coming back."""
     now = datetime.utcnow()
     stale = (
         db.query(models.WorkflowRun)
         .filter(
-            models.WorkflowRun.status.in_(models.WORKFLOW_RUN_LEASED_STATUSES),
+            models.WorkflowRun.status.in_(models.WORKFLOW_RUN_LEASED_STATUSES + models.WORKFLOW_RUN_PAUSED_LEASE_STATUSES),
             models.WorkflowRun.lease_expires_at.isnot(None),
             models.WorkflowRun.lease_expires_at < now,
         )
@@ -56,6 +65,8 @@ def _expire_stale_leases(db: Session):
     for run in stale:
         run.status = "RUNNER_LOST"
         run.ended_at = now
+        run.lease_token = None
+        run.lease_expires_at = None
         _add_event(db, run.id, "RUNNER_LOST", "SYSTEM")
     if stale:
         db.commit()
@@ -158,14 +169,10 @@ def list_runs(slug: str, db: Session = Depends(get_project_db)):
     return [_to_run_out(db, r) for r in runs]
 
 
-@router.get("/{run_id}", response_model=schemas.WorkflowRunDetailOut)
-def get_run(slug: str, run_id: int, request: Request, db: Session = Depends(get_project_db), master_db: Session = Depends(get_master_db)):
-    _require_user_or_runner(request, master_db)
-    _expire_stale_leases(db)
-    run = _get_run(db, run_id)
+def _build_run_detail(db: Session, run: models.WorkflowRun) -> schemas.WorkflowRunDetailOut:
     step_runs = (
         db.query(models.WorkflowStepRun)
-        .filter(models.WorkflowStepRun.workflow_run_id == run_id)
+        .filter(models.WorkflowStepRun.workflow_run_id == run.id)
         .order_by(models.WorkflowStepRun.sequence_no, models.WorkflowStepRun.id)
         .all()
     )
@@ -183,7 +190,7 @@ def get_run(slug: str, run_id: int, request: Request, db: Session = Depends(get_
 
     events = (
         db.query(models.RunnerExecutionEvent)
-        .filter(models.RunnerExecutionEvent.workflow_run_id == run_id)
+        .filter(models.RunnerExecutionEvent.workflow_run_id == run.id)
         .order_by(models.RunnerExecutionEvent.id)
         .all()
     )
@@ -192,6 +199,14 @@ def get_run(slug: str, run_id: int, request: Request, db: Session = Depends(get_
     out.step_runs = step_run_outs
     out.events = events
     return out
+
+
+@router.get("/{run_id}", response_model=schemas.WorkflowRunDetailOut)
+def get_run(slug: str, run_id: int, request: Request, db: Session = Depends(get_project_db), master_db: Session = Depends(get_master_db)):
+    _require_user_or_runner(request, master_db)
+    _expire_stale_leases(db)
+    run = _get_run(db, run_id)
+    return _build_run_detail(db, run)
 
 
 @router.post("/{run_id}/cancel", response_model=schemas.WorkflowRunOut, dependencies=[Depends(get_current_user)])
@@ -285,6 +300,15 @@ def heartbeat(
         _add_event(db, run.id, "HEARTBEAT", "RUNNER")
         db.commit()
         db.refresh(run)
+    elif run.status in models.WORKFLOW_RUN_PAUSED_LEASE_STATUSES:
+        # HYB-4: the runner keeps heartbeating while paused at a
+        # checkpoint (and while resuming) so a genuinely-dead runner is
+        # still detected -- just on the much longer paused timeout.
+        _require_lease(run, runner, payload.lease_token or "")
+        run.lease_expires_at = datetime.utcnow() + timedelta(seconds=models.PAUSED_LEASE_DURATION_SECONDS)
+        _add_event(db, run.id, "HEARTBEAT", "RUNNER")
+        db.commit()
+        db.refresh(run)
     return _to_run_out(db, run)
 
 
@@ -314,7 +338,12 @@ def post_event(
 
     if payload.event_type == "CHECKPOINT_WAITING":
         run.status = "WAITING_FOR_HUMAN"
-        run.lease_expires_at = None  # not actively lease-tracked while waiting on a human
+        run.checkpoint_waiting_since = datetime.utcnow()
+        # HYB-4: still lease-tracked, just on the longer paused timeout
+        # (see WORKFLOW_RUN_PAUSED_LEASE_STATUSES) -- the runner keeps
+        # heartbeating and the same lease_token stays valid across the
+        # whole pause, so a resume never needs a fresh claim.
+        run.lease_expires_at = datetime.utcnow() + timedelta(seconds=models.PAUSED_LEASE_DURATION_SECONDS)
 
     _add_event(db, run_id, payload.event_type, payload.actor_type, payload.idempotency_key, payload.payload_json)
     db.commit()
@@ -416,7 +445,13 @@ def complete_run(
     run = _get_run(db, run_id)
     _require_lease(run, runner, payload.lease_token)
 
-    allowed_terminal = {"PASSED", "FAILED", "BLOCKED", "SYSTEM_ERROR", "CANCELLED"}
+    # RUNNER_LOST is included here (not just as the lease-sweep's own
+    # verdict) so a runner that's still connected but just lost its own
+    # Chromium session while paused at a checkpoint can self-report
+    # honestly rather than silently going quiet until the lease sweep
+    # catches it (see docs/hybrid/SESSION_HANDOFF.md's HYB-4 lost-browser
+    # requirement).
+    allowed_terminal = {"PASSED", "FAILED", "BLOCKED", "SYSTEM_ERROR", "CANCELLED", "RUNNER_LOST"}
     if payload.status not in allowed_terminal:
         raise HTTPException(status_code=400, detail=f"status must be one of {sorted(allowed_terminal)}")
 
@@ -529,3 +564,354 @@ async def upload_run_evidence(
     _add_event(db, run_id, "STEP_COMPLETED", "RUNNER", payload_json=f'{{"evidence_id":{item.id},"kind":"screenshot"}}')
     db.commit()
     return item
+
+
+# ---------- HYB-4: manual checkpoints (human decision + resume) ----------
+
+
+def _get_checkpoint_step(db: Session, run: models.WorkflowRun, workflow_step_id: int) -> models.WorkflowStep:
+    step = (
+        db.query(models.WorkflowStep)
+        .filter(models.WorkflowStep.id == workflow_step_id, models.WorkflowStep.revision_id == run.workflow_revision_id)
+        .first()
+    )
+    if not step:
+        raise HTTPException(status_code=404, detail="Workflow step not found on this run's revision")
+    if step.step_type != "MANUAL_CHECKPOINT":
+        raise HTTPException(status_code=400, detail="This step is not a MANUAL_CHECKPOINT")
+    return step
+
+
+def _decisions_for(db: Session, run_id: int, workflow_step_id: int) -> list[models.WorkflowCheckpointDecision]:
+    return (
+        db.query(models.WorkflowCheckpointDecision)
+        .filter(
+            models.WorkflowCheckpointDecision.workflow_run_id == run_id,
+            models.WorkflowCheckpointDecision.workflow_step_id == workflow_step_id,
+        )
+        .order_by(models.WorkflowCheckpointDecision.decision_revision_no)
+        .all()
+    )
+
+
+@router.get("/{run_id}/checkpoint", response_model=schemas.CheckpointContextOut)
+def get_checkpoint_context(
+    slug: str,
+    run_id: int,
+    workflow_step_id: int,
+    db: Session = Depends(get_project_db),
+    _user: models.User = Depends(get_current_user),
+):
+    """Everything the human-checkpoint review UI needs in one call --
+    linked Track A test case(s) at the exact revision snapshot, the
+    workflow revision, prior automated step results, machine assertions
+    (the step-run history already carries these), and this checkpoint's
+    own decision history. Reuses WorkflowRunDetailOut rather than a
+    parallel shape."""
+    _expire_stale_leases(db)
+    run = _get_run(db, run_id)
+    step = _get_checkpoint_step(db, run, workflow_step_id)
+
+    revision = db.query(models.WorkflowRevision).filter(models.WorkflowRevision.id == run.workflow_revision_id).first()
+    workflow_name = None
+    if revision:
+        wf = db.query(models.WorkflowDefinition).filter(models.WorkflowDefinition.id == revision.workflow_id).first()
+        workflow_name = wf.name if wf else None
+
+    links = (
+        db.query(models.WorkflowTestCaseLink)
+        .filter(models.WorkflowTestCaseLink.workflow_revision_id == run.workflow_revision_id)
+        .all()
+    )
+    case_by_id = {c.id: c for c in db.query(models.TestCase).filter(models.TestCase.id.in_([l.test_case_id for l in links])).all()}
+    link_outs = []
+    for l in links:
+        out = schemas.WorkflowTestCaseLinkOut.model_validate(l)
+        case = case_by_id.get(l.test_case_id)
+        if case:
+            out.checkpoint_code = case.checkpoint_code
+            out.case_title = case.title
+        link_outs.append(out)
+
+    elapsed = None
+    if run.checkpoint_waiting_since:
+        elapsed = (datetime.utcnow() - run.checkpoint_waiting_since).total_seconds()
+
+    cycle_id = None
+    if run.cycle_test_result_id:
+        result = db.query(models.CycleTestResult).filter(models.CycleTestResult.id == run.cycle_test_result_id).first()
+        if result:
+            cycle_id = result.cycle_id
+
+    return schemas.CheckpointContextOut(
+        run=_build_run_detail(db, run),
+        workflow_step_id=step.id,
+        step_description=step.description,
+        checkpoint_instructions=step.checkpoint_instructions,
+        expected_value=step.expected_value,
+        workflow_name=workflow_name,
+        workflow_revision_label=revision.revision_label if revision else None,
+        cycle_id=cycle_id,
+        linked_test_cases=link_outs,
+        decisions=_decisions_for(db, run_id, workflow_step_id),
+        checkpoint_waiting_since=run.checkpoint_waiting_since,
+        elapsed_waiting_seconds=elapsed,
+    )
+
+
+@router.get("/{run_id}/checkpoint-decisions", response_model=list[schemas.WorkflowCheckpointDecisionOut], dependencies=[Depends(get_current_user)])
+def list_checkpoint_decisions(slug: str, run_id: int, workflow_step_id: int | None = None, db: Session = Depends(get_project_db)):
+    _get_run(db, run_id)
+    q = db.query(models.WorkflowCheckpointDecision).filter(models.WorkflowCheckpointDecision.workflow_run_id == run_id)
+    if workflow_step_id is not None:
+        q = q.filter(models.WorkflowCheckpointDecision.workflow_step_id == workflow_step_id)
+    return q.order_by(models.WorkflowCheckpointDecision.id).all()
+
+
+@router.post("/{run_id}/checkpoint-decision", response_model=schemas.WorkflowCheckpointDecisionOut)
+def submit_checkpoint_decision(
+    slug: str,
+    run_id: int,
+    payload: schemas.WorkflowCheckpointDecisionCreate,
+    db: Session = Depends(get_project_db),
+    user: models.User = Depends(require_tester),
+):
+    """The human-decision half of HYB-4's resume protocol -- user-session
+    auth only, never a runner token or a trusted client-supplied
+    identity (decided_by_* is always taken from `user`, server-derived).
+
+    Decision-conflict protection: the same atomic transaction that
+    inserts the decision row also flips run.status away from
+    WAITING_FOR_HUMAN. A second, racing decision request finds
+    run.status already moved on and is rejected with 409 -- "first
+    commit wins", the same pattern already used for the evidence-upload
+    quota race. SQLite serializes writer commits, so whichever request's
+    commit lands first deterministically wins; there is no window where
+    both could succeed.
+
+    Idempotency: a retried POST (double-click, network retry) with the
+    same idempotency_key returns the original decision instead of
+    erroring or duplicating -- checked before the WAITING_FOR_HUMAN gate
+    so a legitimate retry succeeds even after the run has already moved
+    on because of that exact request's own earlier, successfully-
+    committed attempt.
+    """
+    _expire_stale_leases(db)
+    run = _get_run(db, run_id)
+    step = _get_checkpoint_step(db, run, payload.workflow_step_id)
+
+    if payload.idempotency_key:
+        existing = (
+            db.query(models.WorkflowCheckpointDecision)
+            .filter(
+                models.WorkflowCheckpointDecision.workflow_run_id == run_id,
+                models.WorkflowCheckpointDecision.workflow_step_id == step.id,
+                models.WorkflowCheckpointDecision.idempotency_key == payload.idempotency_key,
+            )
+            .first()
+        )
+        if existing:
+            return existing
+
+    if run.status != "WAITING_FOR_HUMAN":
+        raise HTTPException(
+            status_code=409,
+            detail=f"This run is not currently waiting for a human decision (status: {run.status}) — "
+            "the checkpoint may already have been decided by someone else, or the run has ended.",
+        )
+
+    if payload.status not in models.CHECKPOINT_DECISION_STATUSES:
+        raise HTTPException(status_code=400, detail=f"status must be one of {models.CHECKPOINT_DECISION_STATUSES}")
+    if payload.status == "FAIL" and not (payload.actual_result_md or "").strip():
+        raise HTTPException(status_code=400, detail="FAIL requires an actual result")
+    if payload.status == "BLOCKED" and not (payload.reason or "").strip():
+        raise HTTPException(status_code=400, detail="BLOCKED requires a reason")
+    if payload.status == "NOT_APPLICABLE" and not (payload.reason or "").strip():
+        raise HTTPException(status_code=400, detail="NOT_APPLICABLE requires a reason")
+
+    cycle = None
+    result = None
+    if run.cycle_test_result_id:
+        result = db.query(models.CycleTestResult).filter(models.CycleTestResult.id == run.cycle_test_result_id).first()
+        if result:
+            cycle = db.query(models.TestCycle).filter(models.TestCycle.id == result.cycle_id).first()
+        if cycle and cycle.status == "LOCKED":
+            raise HTTPException(status_code=400, detail="Cycle is LOCKED — checkpoint decisions cannot be recorded. An admin must /reopen it first.")
+        if payload.status == "PASS" and cycle and cycle.require_evidence_for_pass:
+            has_evidence = (
+                db.query(models.EvidenceItem)
+                .filter(models.EvidenceItem.cycle_test_result_id == result.id, models.EvidenceItem.status == "ACTIVE")
+                .first()
+            )
+            if not has_evidence:
+                raise HTTPException(
+                    status_code=400,
+                    detail="PASS requires at least one evidence item (this cycle's require_evidence_for_pass is enabled)",
+                )
+
+    prior = _decisions_for(db, run_id, step.id)
+    next_revision_no = (prior[-1].decision_revision_no + 1) if prior else 1
+    resume_authorized = payload.status == "PASS"
+
+    checkpoint_step_run = (
+        db.query(models.WorkflowStepRun)
+        .filter(models.WorkflowStepRun.workflow_run_id == run_id, models.WorkflowStepRun.workflow_step_id == step.id)
+        .order_by(models.WorkflowStepRun.id.desc())
+        .first()
+    )
+
+    decision = models.WorkflowCheckpointDecision(
+        workflow_run_id=run_id,
+        workflow_step_id=step.id,
+        workflow_step_run_id=checkpoint_step_run.id if checkpoint_step_run else None,
+        decision_revision_no=next_revision_no,
+        status=payload.status,
+        actual_result_md=payload.actual_result_md,
+        reason=payload.reason,
+        decided_by_user_id=user.id,
+        decided_by_email=user.email,
+        source="HUMAN",
+        resume_authorized=resume_authorized,
+        review_status="UNREVIEWED" if payload.status == "NOT_APPLICABLE" else None,
+        idempotency_key=payload.idempotency_key,
+    )
+    db.add(decision)
+    db.flush()
+
+    # Link any evidence the reviewer attached while deciding. Server-side
+    # only, and scoped to this exact cycle_test_result_id so a client
+    # can't attach evidence belonging to an unrelated result.
+    if payload.evidence_ids and run.cycle_test_result_id:
+        db.query(models.EvidenceItem).filter(
+            models.EvidenceItem.id.in_(payload.evidence_ids),
+            models.EvidenceItem.cycle_test_result_id == run.cycle_test_result_id,
+        ).update({models.EvidenceItem.checkpoint_decision_id: decision.id}, synchronize_session=False)
+
+    # Finalize the checkpoint's own step-run row now -- independent of
+    # whether the runner ever reconnects to observe it. STEP_RUN_STATUSES
+    # has no BLOCKED/NOT_APPLICABLE state of its own (it's shared with
+    # automated step execution); PASSED/FAILED is enough to be honest
+    # here since the real distinction lives on the decision row itself.
+    if checkpoint_step_run:
+        checkpoint_step_run.status = "PASSED" if payload.status == "PASS" else "FAILED"
+        checkpoint_step_run.outcome = f"Human checkpoint decision: {payload.status}"
+        checkpoint_step_run.ended_at = datetime.utcnow()
+
+    if resume_authorized:
+        run.status = "RESUMING"
+        # lease_token/lease_expires_at deliberately left as-is -- the same
+        # runner, same lease, same browser session picks this up on its
+        # next poll via POST /checkpoint-resume.
+    else:
+        run.status = "BLOCKED" if payload.status == "BLOCKED" else ("NOT_APPLICABLE" if payload.status == "NOT_APPLICABLE" else "FAILED")
+        run.ended_at = datetime.utcnow()
+        run.lease_token = None
+        run.lease_expires_at = None
+    run.checkpoint_waiting_since = None
+
+    _add_event(
+        db, run_id, "CHECKPOINT_DECIDED", "HUMAN",
+        payload_json=f'{{"decision_id":{decision.id},"status":"{payload.status}","workflow_step_id":{step.id}}}',
+    )
+    db.commit()
+    db.refresh(decision)
+    return decision
+
+
+@router.post("/{run_id}/checkpoint-decisions/{decision_id}/review", response_model=schemas.WorkflowCheckpointDecisionOut)
+def review_checkpoint_decision(
+    slug: str,
+    run_id: int,
+    decision_id: int,
+    payload: schemas.CheckpointDecisionReviewRequest,
+    db: Session = Depends(get_project_db),
+    user: models.User = Depends(require_admin),
+):
+    """Admin approval for NOT_APPLICABLE checkpoint decisions -- mirrors
+    routers/cycle_results.py::review_result's existing Track A policy
+    rather than inventing a second one."""
+    decision = (
+        db.query(models.WorkflowCheckpointDecision)
+        .filter(models.WorkflowCheckpointDecision.id == decision_id, models.WorkflowCheckpointDecision.workflow_run_id == run_id)
+        .first()
+    )
+    if not decision:
+        raise HTTPException(status_code=404, detail="Checkpoint decision not found")
+    if decision.status != "NOT_APPLICABLE":
+        raise HTTPException(status_code=400, detail="Only a NOT_APPLICABLE decision can be reviewed")
+    if payload.review_status not in ("ACCEPTED", "CHANGES_REQUESTED"):
+        raise HTTPException(status_code=400, detail="review_status must be ACCEPTED or CHANGES_REQUESTED")
+
+    decision.review_status = payload.review_status
+    decision.reviewed_by = user.email
+    decision.reviewed_at = datetime.utcnow()
+    db.commit()
+    db.refresh(decision)
+    return decision
+
+
+@router.post("/{run_id}/checkpoint-resume", response_model=schemas.CheckpointResumeOut)
+def resume_after_checkpoint(
+    slug: str,
+    run_id: int,
+    payload: schemas.CheckpointResumeRequest,
+    db: Session = Depends(get_project_db),
+    runner: models.RunnerToken = Depends(get_current_runner),
+):
+    """The runner calls this after observing (via heartbeat/poll) that
+    its paused run moved to RESUMING. Validates the response belongs to
+    the correct run/step/checkpoint/decision before honoring it (a stale
+    or mismatched request never resumes anything), and is idempotent
+    against a duplicate resume call from the same still-connected runner.
+    A *different* runner process (no live browser, no knowledge of this
+    lease_token) cannot call this at all -- _require_lease rejects it,
+    the same as every other runner-authenticated action -- so a resume
+    can never be fabricated by a fresh process that doesn't actually
+    hold the original browser session."""
+    _expire_stale_leases(db)
+    run = _get_run(db, run_id)
+    step = _get_checkpoint_step(db, run, payload.workflow_step_id)
+
+    if run.status == "RUNNING":
+        # Idempotent replay of an already-completed resume from the same
+        # (lease-verified) runner -- not an error, not a re-trigger.
+        _require_lease(run, runner, payload.lease_token)
+    elif run.status != "RESUMING":
+        raise HTTPException(
+            status_code=409,
+            detail=f"This run is not in RESUMING state (status: {run.status}) — nothing to resume.",
+        )
+    else:
+        _require_lease(run, runner, payload.lease_token)
+
+    latest = _decisions_for(db, run_id, step.id)
+    decision = latest[-1] if latest else None
+    if not decision or not decision.resume_authorized:
+        raise HTTPException(status_code=409, detail="No PASS decision authorizes resuming this checkpoint")
+
+    if run.status == "RESUMING":
+        run.status = "RUNNING"
+        run.lease_expires_at = datetime.utcnow() + timedelta(seconds=models.LEASE_DURATION_SECONDS)
+        _add_event(
+            db, run_id, "RUN_RESUMED", "RUNNER",
+            payload_json=f'{{"workflow_step_id":{step.id},"decision_id":{decision.id}}}',
+        )
+        db.commit()
+        db.refresh(run)
+
+    remaining_steps = (
+        db.query(models.WorkflowStep)
+        .filter(
+            models.WorkflowStep.revision_id == run.workflow_revision_id,
+            models.WorkflowStep.enabled.is_(True),
+            models.WorkflowStep.sequence_no > step.sequence_no,
+        )
+        .order_by(models.WorkflowStep.sequence_no)
+        .all()
+    )
+
+    return schemas.CheckpointResumeOut(
+        run=schemas.WorkflowRunOut.model_validate(_to_run_out(db, run)),
+        steps=[schemas.WorkflowRunClaimStep.model_validate(s) for s in remaining_steps],
+        decision=schemas.WorkflowCheckpointDecisionOut.model_validate(decision),
+    )

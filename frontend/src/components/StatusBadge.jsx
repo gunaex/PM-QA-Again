@@ -23,6 +23,17 @@ const STYLES = {
   UNREVIEWED: 'bg-gray-100 text-gray-600',
   ACCEPTED: 'bg-green-100 text-green-700',
   CHANGES_REQUESTED: 'bg-red-100 text-red-700',
+  // Workflow runs (HYB-2/HYB-4)
+  QUEUED: 'bg-gray-100 text-gray-600',
+  CLAIMED: 'bg-blue-100 text-blue-700',
+  STARTING: 'bg-blue-100 text-blue-700',
+  RUNNING: 'bg-blue-100 text-blue-700',
+  PASSED: 'bg-green-100 text-green-700',
+  FAILED: 'bg-red-100 text-red-700',
+  WAITING_FOR_HUMAN: 'bg-amber-100 text-amber-800',
+  RESUMING: 'bg-amber-100 text-amber-800',
+  RUNNER_LOST: 'bg-red-100 text-red-700',
+  SYSTEM_ERROR: 'bg-red-100 text-red-700',
 }
 
 export default function StatusBadge({ status }) {

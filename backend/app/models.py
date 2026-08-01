@@ -273,6 +273,12 @@ class EvidenceItem(ProjectBase):
     # checkpoint-decision model exists to reference.
     workflow_run_id = Column(Integer, nullable=True)
     workflow_step_run_id = Column(Integer, nullable=True)
+    # HYB-4: set (server-side, never client-supplied) when a reviewer
+    # attaches this evidence to a specific checkpoint decision at
+    # decision-submission time -- the column the HYB-1 gap-analysis
+    # deferred specifically to this phase. Nullable/additive; every prior
+    # row (Track A, HYB-2 runner screenshots) leaves it null.
+    checkpoint_decision_id = Column(Integer, ForeignKey("workflow_checkpoint_decisions.id"), nullable=True)
 
 
 class EvidenceRevision(ProjectBase):
@@ -454,6 +460,13 @@ class Defect(ProjectBase):
     created_by = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    # HYB-4: optional links so a defect raised from a checkpoint review
+    # carries its full provenance (run/step/decision), reusing this same
+    # table rather than a parallel hybrid defect model. All nullable —
+    # every pre-HYB-4 defect leaves them null.
+    workflow_run_id = Column(Integer, ForeignKey("workflow_runs.id"), nullable=True)
+    workflow_step_run_id = Column(Integer, ForeignKey("workflow_step_runs.id"), nullable=True)
+    checkpoint_decision_id = Column(Integer, ForeignKey("workflow_checkpoint_decisions.id"), nullable=True)
 
 
 class SignOff(ProjectBase):
@@ -599,14 +612,25 @@ class WorkflowTestCaseLink(ProjectBase):
 
 WORKFLOW_RUN_STATUSES = (
     "QUEUED", "CLAIMED", "STARTING", "RUNNING", "PAUSED", "WAITING_FOR_HUMAN",
-    "RESUMING", "PASSED", "FAILED", "BLOCKED", "CANCELLED", "RUNNER_LOST", "SYSTEM_ERROR",
+    "RESUMING", "PASSED", "FAILED", "BLOCKED", "NOT_APPLICABLE", "CANCELLED",
+    "RUNNER_LOST", "SYSTEM_ERROR",
 )
-# Terminal: no further mutation, no further lease. WAITING_FOR_HUMAN is
-# deliberately NOT terminal (HYB-4 resumes it) and deliberately NOT
-# lease-tracked (a human deciding takes arbitrarily long; only the
-# runner's own active-execution window is lease-bound).
-WORKFLOW_RUN_TERMINAL_STATUSES = ("PASSED", "FAILED", "BLOCKED", "CANCELLED", "RUNNER_LOST", "SYSTEM_ERROR")
+# Terminal: no further mutation, no further lease. WAITING_FOR_HUMAN and
+# RESUMING are deliberately NOT terminal -- HYB-4's decision/resume
+# protocol moves a run through them -- but ARE now lease-tracked (see
+# WORKFLOW_RUN_PAUSED_LEASE_STATUSES below): a runner that stops
+# heartbeating while paused must still be detected as lost, just on a
+# longer timeout than the active-execution lease.
+WORKFLOW_RUN_TERMINAL_STATUSES = (
+    "PASSED", "FAILED", "BLOCKED", "NOT_APPLICABLE", "CANCELLED", "RUNNER_LOST", "SYSTEM_ERROR",
+)
 WORKFLOW_RUN_LEASED_STATUSES = ("CLAIMED", "STARTING", "RUNNING")
+# HYB-4: the runner keeps heartbeating and its lease alive while paused at
+# a checkpoint and while resuming, just under a much longer timeout (a
+# human deciding takes arbitrarily long; a 60s active-execution lease
+# would false-positive RUNNER_LOST on every real checkpoint).
+WORKFLOW_RUN_PAUSED_LEASE_STATUSES = ("WAITING_FOR_HUMAN", "RESUMING")
+PAUSED_LEASE_DURATION_SECONDS = 300
 
 STEP_RUN_STATUSES = ("PENDING", "RUNNING", "PASSED", "FAILED", "SKIPPED")
 FAILURE_CATEGORIES = (
@@ -617,9 +641,63 @@ FAILURE_CATEGORIES = (
 RUNNER_EXEC_EVENT_TYPES = (
     "RUN_QUEUED", "RUN_CLAIMED", "STEP_STARTED", "STEP_COMPLETED", "STEP_FAILED",
     "CHECKPOINT_WAITING", "HEARTBEAT", "RUN_CANCELLED", "RUN_COMPLETED", "RUNNER_LOST",
+    # HYB-4
+    "CHECKPOINT_DECIDED", "RUN_RESUMED",
 )
 
 LEASE_DURATION_SECONDS = 60
+
+# ---------- HYB-4: manual checkpoint decisions ----------
+# One row per decision, append-only -- never edited, never overwritten.
+# Decision-conflict protection is NOT a column on this table: it's the
+# atomic run.status compare-and-swap in routers/workflow_runs.py's
+# submit_checkpoint_decision (the run must be WAITING_FOR_HUMAN, and the
+# same transaction that inserts this row also flips run.status away from
+# WAITING_FOR_HUMAN) -- exactly the "first commit wins" pattern already
+# used for the evidence-upload quota race (see evidence.py). A second
+# racing decision simply finds run.status no longer WAITING_FOR_HUMAN and
+# is rejected with 409, never silently overwriting the first row.
+CHECKPOINT_DECISION_STATUSES = CHECKPOINT_DECISIONS  # PASS|FAIL|BLOCKED|NOT_APPLICABLE -- same vocabulary as the HYB-0 spike
+
+
+class WorkflowCheckpointDecision(ProjectBase):
+    __tablename__ = "workflow_checkpoint_decisions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    workflow_run_id = Column(Integer, ForeignKey("workflow_runs.id"), nullable=False)
+    workflow_step_id = Column(Integer, ForeignKey("workflow_steps.id"), nullable=False)
+    workflow_step_run_id = Column(Integer, ForeignKey("workflow_step_runs.id"), nullable=True)
+    # Monotonically increasing per (workflow_run_id, workflow_step_id) --
+    # always 1 in the common case (a checkpoint occurrence is decided
+    # exactly once thanks to the CAS above), but the column exists so a
+    # deliberate rerun/re-checkpoint scenario has an honest place to
+    # record "this is the Nth decision for this exact checkpoint
+    # occurrence" without ever reusing or editing row 1.
+    decision_revision_no = Column(Integer, nullable=False, default=1)
+    status = Column(String, nullable=False)  # see CHECKPOINT_DECISION_STATUSES
+    actual_result_md = Column(Text, nullable=True)
+    reason = Column(Text, nullable=True)
+    # Server-derived, never trusted from the frontend -- set from the
+    # authenticated user session in the router, exactly like every other
+    # *_by/*_at column in this app.
+    decided_by_user_id = Column(Integer, nullable=False)  # master DB users.id -- cross-DB, not a real FK
+    decided_by_email = Column(String, nullable=False)
+    decided_at = Column(DateTime, default=datetime.utcnow)
+    source = Column(String, default="HUMAN")  # always HUMAN -- see RESULT_SOURCES; this table has no RUNNER/SYSTEM path
+    resume_authorized = Column(Boolean, nullable=False)  # True only for PASS
+    # NOT_APPLICABLE mirrors CycleTestResult's own admin-review policy
+    # (routers/cycle_results.py::review_result) rather than inventing a
+    # second one.
+    review_status = Column(String, nullable=True)  # UNREVIEWED|ACCEPTED|CHANGES_REQUESTED -- NOT_APPLICABLE only
+    reviewed_by = Column(String, nullable=True)
+    reviewed_at = Column(DateTime, nullable=True)
+    idempotency_key = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("workflow_run_id", "workflow_step_id", "decision_revision_no", name="uq_checkpoint_decision_revision"),
+        UniqueConstraint("workflow_run_id", "workflow_step_id", "idempotency_key", name="uq_checkpoint_decision_idempotency"),
+    )
 
 
 class WorkflowRun(ProjectBase):
@@ -650,6 +728,10 @@ class WorkflowRun(ProjectBase):
     started_at = Column(DateTime, nullable=True)
     ended_at = Column(DateTime, nullable=True)
     result_summary = Column(Text, nullable=True)
+    # HYB-4: set when the run enters WAITING_FOR_HUMAN, cleared on resume
+    # or terminal decision -- powers the checkpoint UI's elapsed-waiting-
+    # time display without recomputing it from the event log every poll.
+    checkpoint_waiting_since = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

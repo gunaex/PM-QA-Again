@@ -24,6 +24,7 @@ import {
 import { useAuth } from '../auth/AuthContext.jsx'
 import StatusBadge from '../components/StatusBadge.jsx'
 import RecordingPanel from '../components/RecordingPanel.jsx'
+import CheckpointPanel from '../components/CheckpointPanel.jsx'
 
 const STEP_TYPES = [
   'NAVIGATE', 'CLICK', 'FILL', 'SELECT', 'CHECK', 'UNCHECK', 'PRESS_KEY',
@@ -493,12 +494,29 @@ export default function WorkflowDetail() {
                       {expandedRunId === r.id && expandedRunDetail && (
                         <div className="px-3 pb-3 pt-1 border-t border-gray-50 space-y-2">
                           <div className="flex items-center gap-2">
-                            {!['PASSED', 'FAILED', 'BLOCKED', 'CANCELLED', 'RUNNER_LOST', 'SYSTEM_ERROR'].includes(expandedRunDetail.status) && (
+                            {![
+                              'PASSED', 'FAILED', 'BLOCKED', 'NOT_APPLICABLE', 'CANCELLED', 'RUNNER_LOST', 'SYSTEM_ERROR',
+                            ].includes(expandedRunDetail.status) && (
                               <button onClick={() => handleCancelRun(r.id)} className="text-xs text-red-600 hover:underline">
                                 Cancel
                               </button>
                             )}
                           </div>
+                          {(() => {
+                            const checkpointStepRun = expandedRunDetail.step_runs.find((sr) => sr.step_type === 'MANUAL_CHECKPOINT')
+                            if (!checkpointStepRun) return null
+                            return (
+                              <CheckpointPanel
+                                slug={slug}
+                                runId={r.id}
+                                workflowStepId={checkpointStepRun.workflow_step_id}
+                                run={expandedRunDetail}
+                                canEdit={canEdit}
+                                isAdmin={isAdmin}
+                                onDecided={loadRuns}
+                              />
+                            )
+                          })()}
                           <div>
                             <p className="text-[10px] font-medium text-gray-400 uppercase mb-1">Step Runs</p>
                             {expandedRunDetail.step_runs.length === 0 ? (

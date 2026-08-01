@@ -5,7 +5,7 @@ import AnnotationEditor from './AnnotationEditor.jsx'
 /** Evidence-first execution requirement (rebuild prompt §13): three
  * capture paths — screen capture, clipboard paste, file upload — all
  * funnel into the same authenticated upload endpoint. */
-export default function EvidenceGallery({ slug, cycleId, resultId, canEdit, isAdmin, isLocked }) {
+export default function EvidenceGallery({ slug, cycleId, resultId, canEdit, isAdmin, isLocked, workflowRunId, workflowStepRunId }) {
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -51,7 +51,7 @@ export default function EvidenceGallery({ slug, cycleId, resultId, canEdit, isAd
     setUploading(true)
     setError(null)
     try {
-      await uploadEvidence(slug, cycleId, resultId, blob, { evidenceType, filename })
+      await uploadEvidence(slug, cycleId, resultId, blob, { evidenceType, filename, workflowRunId, workflowStepRunId })
       load()
     } catch (err) {
       const detail = err.response?.data?.detail

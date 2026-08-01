@@ -304,7 +304,7 @@ proceed on a dedicated `feature/hybrid-mvp` branch while Release Closure
 remains open. Production readiness is **not** claimed regardless of how
 much HYB work completes; see Track B below for HYB-1's actual status.
 
-## Track B — Hybrid manual+automation expansion (HYB-0–HYB-3 complete; HYB-4–HYB-5 pending)
+## Track B — Hybrid manual+automation expansion (HYB-0–HYB-4 complete; HYB-5 pending)
 
 Full detail lives in `QA_AGAIN_HYBRID_AI_QA_MVP_EXPANSION.md`; this is
 the index. QA-Again gains a separate **QA Runner** (Node.js + Playwright,
@@ -563,9 +563,164 @@ Delivery sequence after the spike:
   raw SQLite DB file bytes, the backend's request-timing log, and every
   one of the runner's own console logs across all recording/replay
   attempts this session — all clean.
-- **HYB-4** — hybrid checkpoint and evidence (pause/resume UI, manual
-  decisions, screenshot capture/upload, annotation linkage, defect
-  linkage, lost-runner handling).
+- **HYB-4** — manual checkpoints and hybrid evidence. **Done, 2026-08-02**
+  — branch `feature/hybrid-mvp`. Builds the *resume* side of HYB-2's
+  already-proven `MANUAL_CHECKPOINT` pause; the pause mechanics
+  themselves are unchanged.
+
+  **Backend** (`backend/app/models.py`/`schemas.py`/`routers/
+  workflow_runs.py`, all additive): new project-scoped
+  `WorkflowCheckpointDecision` table — append-only, one row per decision,
+  `decision_revision_no` per `(workflow_run_id, workflow_step_id)`,
+  `source` always `HUMAN`, `decided_by_user_id`/`decided_by_email`/
+  `decided_at` always server-derived from the authenticated session
+  (`require_tester`), never trusted from the request body.
+  **Decision-conflict protection** is not a lock or a queue — the same
+  DB transaction that inserts the decision row also flips
+  `run.status` away from `WAITING_FOR_HUMAN` (to `RESUMING` for PASS, or
+  a terminal status for FAIL/BLOCKED/NOT_APPLICABLE); a second, racing
+  decision request finds `run.status` already moved and is rejected
+  with `409`, the same "first commit wins" pattern already used for the
+  evidence-upload quota race. A repeated request with the same
+  `idempotency_key` returns the original row instead of erroring or
+  duplicating (checked *before* the `WAITING_FOR_HUMAN` gate, so a
+  legitimate retry succeeds even after that exact request's own earlier
+  attempt already moved the run on). Reason validation mirrors
+  `cycle_results.py` exactly: FAIL requires `actual_result_md`, BLOCKED
+  and NOT_APPLICABLE require `reason`; NOT_APPLICABLE enters the same
+  admin-review queue (`review_status`/`POST .../review`) as Track A's
+  own NOT_APPLICABLE policy — no second policy invented. PASS is
+  rejected with `400` if the linked cycle's `require_evidence_for_pass`
+  is enabled and no evidence exists yet, exactly like a Track A
+  `CycleTestResult` PASS. A LOCKED cycle blocks checkpoint decisions the
+  same way it blocks every other Track A mutation.
+
+  The **paused lease**: `WAITING_FOR_HUMAN`/`RESUMING` are now lease-
+  tracked (`WORKFLOW_RUN_PAUSED_LEASE_STATUSES`), just on a 300s timeout
+  (`PAUSED_LEASE_DURATION_SECONDS`) instead of the 60s active-execution
+  one (`LEASE_DURATION_SECONDS`) — a human deciding takes arbitrarily
+  long; a 60s lease would false-positive `RUNNER_LOST` on every real
+  checkpoint. The *same* `lease_token` stays valid across the entire
+  pause (never nulled, never reissued), so resuming never needs a fresh
+  `/claim`. `_expire_stale_leases` (the existing lazy sweep, no cron)
+  now covers both lease classes — a runner that goes silent while paused
+  is marked `RUNNER_LOST` exactly like one that goes silent mid-step,
+  and this **never touches an existing decision row**: if none exists
+  yet, there's nothing to preserve; if one does (a PASS already flipped
+  the run to `RESUMING` and the runner then vanished before
+  reconnecting), it's left exactly as recorded.
+
+  New endpoints, all under `/api/{slug}/workflow-runs/{run_id}/`:
+  `GET checkpoint` (context: run detail, linked Track A test case(s) at
+  their exact revision snapshot, workflow revision, checkpoint
+  instructions/expected value, decision history, elapsed waiting time —
+  one call, reusing `WorkflowRunDetailOut` rather than a parallel
+  shape), `GET/POST checkpoint-decision(s)`, `POST checkpoint-decisions/
+  {id}/review` (admin, NOT_APPLICABLE only), and `POST checkpoint-
+  resume` (runner-token + lease auth — validates the response belongs to
+  the correct run/step/checkpoint/decision before honoring it; a stale
+  or mismatched request never resumes anything; idempotent against a
+  duplicate resume call from the *same* still-connected runner; a
+  *different* runner process — no live browser, no knowledge of this
+  `lease_token` — cannot call it at all, the same `_require_lease` check
+  every other runner action already uses, so a resume can never be
+  fabricated by a fresh process that doesn't actually hold the original
+  browser session). `complete_run`'s allowed terminal set now includes
+  `RUNNER_LOST` so a still-connected runner that loses its own Chromium
+  session while paused can self-report honestly rather than going quiet
+  until the lease sweep catches it.
+
+  **Evidence and defects** — no parallel subsystem, exactly as
+  `HYB-1-GAP-ANALYSIS-REFRESH.md` decided: `EvidenceItem` gained one
+  additive nullable column, `checkpoint_decision_id` (set server-side,
+  never client-supplied, when a reviewer attaches evidence while
+  deciding). Checkpoint screenshots the runner uploads before pausing
+  already use the existing HYB-2 evidence-upload endpoint with
+  `evidence_source=RUNNER`; a human reviewer's own upload goes through
+  Track A's *own* `POST .../evidence` endpoint (now accepting optional
+  `workflow_run_id`/`workflow_step_run_id` form fields, validated
+  against the run) rather than a new one, defaulting to
+  `evidence_source=HUMAN` exactly as it always has. `Defect` gained
+  three additive nullable columns (`workflow_run_id`/
+  `workflow_step_run_id`/`checkpoint_decision_id`); `DefectCreate` and
+  `DefectUpdate` both accept them, so a checkpoint reviewer can create a
+  new defect or link an existing one through the same defect endpoints
+  Track A already has.
+
+  **Runner** (`runner/src/execution/executor.ts`/`api/
+  executionClient.ts`): the `MANUAL_CHECKPOINT` branch no longer breaks
+  the loop and closes the browser. It now creates the checkpoint's own
+  `WorkflowStepRun` row, captures and uploads a real screenshot, posts
+  `CHECKPOINT_WAITING` (now including page URL/title), then enters
+  `waitForHumanDecision()` — an in-process poll loop that keeps
+  heartbeating (renewing the paused lease) every cycle, checks
+  `page.isClosed()` each iteration (honest Chromium-crash detection —
+  self-reports `RUNNER_LOST` rather than fabricating a resume), and
+  checks `cancel_requested` (so cancellation while paused works
+  cooperatively, same pattern as mid-run cancellation). Once it observes
+  `RESUMING`, it calls `/checkpoint-resume`, splices the returned
+  remaining steps into the *same* step loop, and continues executing
+  against the *same* `page`/`browser` objects — never a fresh
+  `chromium.launch()`. A transient network error while polling is
+  logged and retried, not treated as loss; the server's own 300s paused-
+  lease grace window is what actually decides genuine staleness.
+
+  **Frontend**: `CheckpointPanel.jsx` (new) — rendered inline inside
+  `WorkflowDetail.jsx`'s existing expanded-run view whenever a
+  `MANUAL_CHECKPOINT` step-run exists for that run. Shows instructions,
+  expected result, linked Track A case(s), prior automated step results,
+  live elapsed-waiting time (polls every 3s while `WAITING_FOR_HUMAN`),
+  decision history with real actor/timestamp, and — reusing
+  `EvidenceGallery`/`AnnotationEditor` unchanged, just passed the run/
+  step-run ids to tag new uploads with — the exact same screenshot-
+  capture/paste/upload/annotate flow Track A's own execution screen
+  already has. PASS/FAIL/BLOCKED/NOT_APPLICABLE decision buttons with
+  inline reason validation, plus inline "create defect"/"link existing
+  defect" using the same `createDefect`/`updateDefect` calls a future
+  standalone defects UI would use.
+
+  Verified: 12 new backend pytest tests (full PASS-resume flow with
+  evidence-required-for-PASS gating; FAIL is terminal and a racing
+  second decision is rejected with `409`, never overwriting it;
+  FAIL/BLOCKED reason validation; NOT_APPLICABLE + admin review; decision
+  conflict; idempotent retry; `RUNNER_LOST` while paused via lease-
+  duration monkeypatching, confirming prior step results and the paused
+  state survive; LOCKED-cycle rejection; defect provenance linkage;
+  wrong-lease-token resume rejection) — full suite **69/69** (57 + 12).
+  Frontend build clean. Runner `tsc --noEmit` clean.
+
+  **Real end-to-end verification, not mocked**: real FastAPI + SQLite
+  backend, real Node.js/TypeScript runner, **real headed Chromium**,
+  driven entirely through the real HTTP API (curl) to simulate a real
+  human tester, against a workflow with a real automated step before and
+  after a `MANUAL_CHECKPOINT`. Three separate real runs:
+  (1) **PASS + resume**: the pre-checkpoint steps set a `localStorage`
+  marker in the browser and asserted it; the runner paused, uploaded a
+  real 7,720-byte `SCREENSHOT` evidence item (`evidence_source=RUNNER`),
+  a real human PASS decision was submitted with real actor identity
+  (`decided_by_email=admin@example.com`) and timestamp; the *same*
+  runner process observed `RESUMING`, called `/checkpoint-resume`, and
+  continued in the *same* browser session — the post-checkpoint step
+  re-read the page and found the marker **still set**, which is only
+  possible if the in-memory browser context genuinely survived the pause
+  (a fresh `chromium.launch()` would have empty `localStorage`); the run
+  reached `PASSED` with all 6 steps green and a full HUMAN→RUNNER
+  provenance-tagged event trail (`CHECKPOINT_DECIDED`/HUMAN,
+  `RUN_RESUMED`/RUNNER). (2) **FAIL is terminal**: a human FAIL decision
+  immediately ended the run `FAILED`; a racing second decision request
+  (simulating another tester, or a retry) was rejected `409` and did
+  **not** overwrite it; the still-connected runner observed the terminal
+  status on its next poll, correctly declined to resume, and exited
+  without ever executing the two post-checkpoint steps — confirmed via
+  the API that exactly one decision row exists (`status: FAIL`) and only
+  4 of 6 step-runs were ever created. (3) **Cancellation while paused**:
+  `cancel_requested` was set on a paused run; the runner's poll loop
+  observed it on its next cycle and called `/complete` with `CANCELLED`
+  itself, closing the browser cleanly. All three runs' full event/
+  decision/step-run history was independently confirmed via the API
+  afterward. Confirmed no secret values or unrelated local artifacts
+  were committed (`runner/.env`, used only for this verification, is
+  gitignored and was deleted afterward).
 - **HYB-5** — timing, reports, hardening (per-step timing history,
   hybrid execution report, machine-vs-human provenance, export updates,
   `docs/HYBRID_RUNNER_THREAT_MODEL.md`, recovery/retry rules, operator

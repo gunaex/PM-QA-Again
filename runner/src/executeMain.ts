@@ -16,7 +16,9 @@ claimAndExecuteOnce(config, { headless })
       console.log("[runner] exiting -- nothing to execute");
       return;
     }
-    console.log(`[runner] exiting -- finalStatus=${result.finalStatus} pausedAtCheckpoint=${result.pausedAtCheckpoint}`);
+    console.log(
+      `[runner] exiting -- finalStatus=${result.finalStatus} pausedAtCheckpoint=${result.pausedAtCheckpoint} resumedFromCheckpoint=${result.resumedFromCheckpoint}`,
+    );
   })
   .catch((err) => {
     console.error("[runner] execution failed:", err);

@@ -46,6 +46,9 @@ def create_defect(
         severity=payload.severity,
         external_url=payload.external_url,
         created_by=user.email,
+        workflow_run_id=payload.workflow_run_id,
+        workflow_step_run_id=payload.workflow_step_run_id,
+        checkpoint_decision_id=payload.checkpoint_decision_id,
     )
     db.add(defect)
     db.commit()

@@ -465,6 +465,7 @@ class EvidenceItemOut(BaseModel):
     created_at: datetime
     workflow_run_id: Optional[int] = None
     workflow_step_run_id: Optional[int] = None
+    checkpoint_decision_id: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -517,6 +518,10 @@ class DefectCreate(BaseModel):
     description_md: Optional[str] = None
     severity: str = "UNSPECIFIED"
     external_url: Optional[str] = None
+    # HYB-4: optional provenance links from a checkpoint review.
+    workflow_run_id: Optional[int] = None
+    workflow_step_run_id: Optional[int] = None
+    checkpoint_decision_id: Optional[int] = None
 
 
 class DefectUpdate(BaseModel):
@@ -525,6 +530,11 @@ class DefectUpdate(BaseModel):
     severity: Optional[str] = None
     status: Optional[str] = None
     external_url: Optional[str] = None
+    # HYB-4: lets a checkpoint reviewer link an *existing* defect to this
+    # run/step/decision, not just create a brand new one.
+    workflow_run_id: Optional[int] = None
+    workflow_step_run_id: Optional[int] = None
+    checkpoint_decision_id: Optional[int] = None
 
 
 class DefectOut(BaseModel):
@@ -540,6 +550,9 @@ class DefectOut(BaseModel):
     created_by: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+    workflow_run_id: Optional[int] = None
+    workflow_step_run_id: Optional[int] = None
+    checkpoint_decision_id: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -715,6 +728,7 @@ class WorkflowRunOut(BaseModel):
     started_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
     result_summary: Optional[str] = None
+    checkpoint_waiting_since: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
     # Flattened for the run list.
@@ -955,3 +969,72 @@ class LocatorTestResultSubmit(BaseModel):
     ok: bool
     message: Optional[str] = None
     lease_token: str
+
+
+# ---------- HYB-4: manual checkpoints and hybrid evidence ----------
+
+
+class WorkflowCheckpointDecisionCreate(BaseModel):
+    workflow_step_id: int
+    status: str  # PASS|FAIL|BLOCKED|NOT_APPLICABLE
+    actual_result_md: Optional[str] = None
+    reason: Optional[str] = None
+    evidence_ids: list[int] = []
+    idempotency_key: Optional[str] = None
+
+
+class WorkflowCheckpointDecisionOut(BaseModel):
+    id: int
+    workflow_run_id: int
+    workflow_step_id: int
+    workflow_step_run_id: Optional[int] = None
+    decision_revision_no: int
+    status: str
+    actual_result_md: Optional[str] = None
+    reason: Optional[str] = None
+    decided_by_user_id: int
+    decided_by_email: str
+    decided_at: datetime
+    source: str
+    resume_authorized: bool
+    review_status: Optional[str] = None
+    reviewed_by: Optional[str] = None
+    reviewed_at: Optional[datetime] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class CheckpointDecisionReviewRequest(BaseModel):
+    review_status: str  # ACCEPTED | CHANGES_REQUESTED
+
+
+class CheckpointContextOut(BaseModel):
+    """Everything the human-checkpoint review UI needs in one call --
+    reuses WorkflowRunDetailOut/WorkflowStepRunOut/RunnerExecutionEventOut
+    rather than duplicating those shapes."""
+
+    run: WorkflowRunDetailOut
+    workflow_step_id: int
+    step_description: Optional[str] = None
+    checkpoint_instructions: Optional[str] = None
+    expected_value: Optional[str] = None
+    workflow_name: Optional[str] = None
+    workflow_revision_label: Optional[str] = None
+    cycle_id: Optional[int] = None
+    linked_test_cases: list[WorkflowTestCaseLinkOut] = []
+    decisions: list[WorkflowCheckpointDecisionOut] = []
+    checkpoint_waiting_since: Optional[datetime] = None
+    elapsed_waiting_seconds: Optional[float] = None
+
+
+class CheckpointResumeRequest(BaseModel):
+    workflow_step_id: int
+    lease_token: str
+
+
+class CheckpointResumeOut(BaseModel):
+    run: WorkflowRunOut
+    steps: list[WorkflowRunClaimStep]
+    decision: WorkflowCheckpointDecisionOut

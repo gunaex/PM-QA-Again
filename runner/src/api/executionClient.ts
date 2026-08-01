@@ -7,7 +7,8 @@ import type { RunnerConfig } from "../env.js";
 
 export type WorkflowRunStatus =
   | "QUEUED" | "CLAIMED" | "STARTING" | "RUNNING" | "PAUSED" | "WAITING_FOR_HUMAN"
-  | "RESUMING" | "PASSED" | "FAILED" | "BLOCKED" | "CANCELLED" | "RUNNER_LOST" | "SYSTEM_ERROR";
+  | "RESUMING" | "PASSED" | "FAILED" | "BLOCKED" | "NOT_APPLICABLE" | "CANCELLED"
+  | "RUNNER_LOST" | "SYSTEM_ERROR";
 
 export interface ClaimedStep {
   id: number;
@@ -37,6 +38,12 @@ export interface RunDetail {
   id: number;
   status: WorkflowRunStatus;
   cancel_requested: boolean;
+}
+
+export interface CheckpointResumeResult {
+  run: { id: number; status: WorkflowRunStatus };
+  steps: ClaimedStep[];
+  decision: { id: number; status: string; resume_authorized: boolean };
 }
 
 export class WorkflowRunClient {
@@ -126,10 +133,29 @@ export class WorkflowRunClient {
     return this.request(`/${runId}/evidence?${qs.toString()}`, { method: "POST", body: form });
   }
 
-  complete(runId: number, leaseToken: string, status: "PASSED" | "FAILED" | "BLOCKED" | "SYSTEM_ERROR" | "CANCELLED", resultSummary?: string): Promise<unknown> {
+  complete(
+    runId: number,
+    leaseToken: string,
+    status: "PASSED" | "FAILED" | "BLOCKED" | "SYSTEM_ERROR" | "CANCELLED" | "RUNNER_LOST",
+    resultSummary?: string,
+  ): Promise<unknown> {
     return this.request(`/${runId}/complete`, {
       method: "POST",
       body: JSON.stringify({ status, result_summary: resultSummary, lease_token: leaseToken }),
+    });
+  }
+
+  /** HYB-4: called once the runner observes (via heartbeat/getRun polling
+   * while paused) that a human decision moved the run to RESUMING.
+   * Validates it belongs to the correct run/step/checkpoint/decision
+   * server-side; returns the exact steps remaining after the checkpoint
+   * so the same in-memory `page`/`browser` can continue without a fresh
+   * claim. Safe to call again if the first response was lost -- the
+   * server treats an already-RUNNING run as an idempotent no-op reply. */
+  resumeCheckpoint(runId: number, leaseToken: string, workflowStepId: number): Promise<CheckpointResumeResult> {
+    return this.request<CheckpointResumeResult>(`/${runId}/checkpoint-resume`, {
+      method: "POST",
+      body: JSON.stringify({ workflow_step_id: workflowStepId, lease_token: leaseToken }),
     });
   }
 }

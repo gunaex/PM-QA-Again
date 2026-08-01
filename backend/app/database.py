@@ -53,6 +53,17 @@ PROJECT_COLUMN_PATCHES: dict[str, dict[str, str]] = {
     "evidence_items": {
         "workflow_run_id": "INTEGER",
         "workflow_step_run_id": "INTEGER",
+        "checkpoint_decision_id": "INTEGER",
+    },
+    # HYB-4: paused-checkpoint timestamp on existing workflow_runs rows,
+    # and provenance links on existing defects rows.
+    "workflow_runs": {
+        "checkpoint_waiting_since": "DATETIME",
+    },
+    "defects": {
+        "workflow_run_id": "INTEGER",
+        "workflow_step_run_id": "INTEGER",
+        "checkpoint_decision_id": "INTEGER",
     },
 }
 
@@ -78,11 +89,11 @@ PROJECT_COLUMN_PATCHES: dict[str, dict[str, str]] = {
 PROJECT_INDEXES: dict[str, list[str]] = {
     "cycle_test_results": ["cycle_id", "test_case_id"],
     "cycle_result_history": ["cycle_test_result_id"],
-    "evidence_items": ["cycle_test_result_id", "cycle_id", "workflow_run_id"],
+    "evidence_items": ["cycle_test_result_id", "cycle_id", "workflow_run_id", "checkpoint_decision_id"],
     "evidence_revisions": ["evidence_id"],
     "test_cases": ["revision_id", "suite_id"],
     "script_revisions": ["suite_id"],
-    "defects": ["cycle_id"],
+    "defects": ["cycle_id", "workflow_run_id", "checkpoint_decision_id"],
     "sign_offs": ["cycle_id"],
     "activity_log": ["changed_at"],
     # HYB-1: workflow list/editor lookups (workflow_revisions.workflow_id
@@ -99,6 +110,9 @@ PROJECT_INDEXES: dict[str, list[str]] = {
     # HYB-3: recording-session claim/list and recorded-step ordering.
     "recording_sessions": ["workflow_id", "status"],
     "recorded_steps": ["recording_session_id"],
+    # HYB-4: checkpoint-decision history lookups (by run, and by the
+    # (run,step) pair used to compute the next decision_revision_no).
+    "workflow_checkpoint_decisions": ["workflow_run_id", "workflow_step_id"],
 }
 
 
