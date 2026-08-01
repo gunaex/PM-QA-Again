@@ -825,3 +825,133 @@ class WorkflowRunCompleteRequest(BaseModel):
     status: str
     result_summary: Optional[str] = None
     lease_token: str
+
+
+# ---------- HYB-3: browser workflow recorder ----------
+
+
+class RecordingSessionCreate(BaseModel):
+    workflow_id: int
+    target_url: str
+
+
+class RecordingSessionOut(BaseModel):
+    id: int
+    workflow_id: int
+    status: str
+    target_url: str
+    requested_by: Optional[str] = None
+    runner_id: Optional[int] = None
+    lease_expires_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class RecordedStepOut(BaseModel):
+    id: int
+    recording_session_id: int
+    sequence_no: int
+    step_type: str
+    description: Optional[str] = None
+    locator_strategy: Optional[str] = None
+    locator_value: Optional[str] = None
+    locator_fallbacks_json: Optional[str] = None
+    locator_warnings_json: Optional[str] = None
+    target_summary: Optional[str] = None
+    page_context: Optional[str] = None
+    diagnostic_x: Optional[int] = None
+    diagnostic_y: Optional[int] = None
+    input_value: Optional[str] = None
+    is_sensitive: bool
+    expected_value: Optional[str] = None
+    checkpoint_instructions: Optional[str] = None
+    needs_review: bool
+    review_note: Optional[str] = None
+    locator_test_requested: bool
+    locator_test_result_json: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class RecordingSessionDetailOut(RecordingSessionOut):
+    recorded_steps: list[RecordedStepOut] = []
+
+
+class RecordedStepCreate(BaseModel):
+    """What the runner posts for each captured DOM action. Deliberately
+    has no field for a sensitive value's real bytes -- the in-page
+    recorder script never sends one across the Node bridge in the first
+    place (see runner/src/recorder/domRecorder.ts)."""
+
+    step_type: str
+    description: Optional[str] = None
+    locator_strategy: Optional[str] = None
+    locator_value: Optional[str] = None
+    locator_fallbacks_json: Optional[str] = None
+    locator_warnings_json: Optional[str] = None
+    target_summary: Optional[str] = None
+    page_context: Optional[str] = None
+    diagnostic_x: Optional[int] = None
+    diagnostic_y: Optional[int] = None
+    input_value: Optional[str] = None
+    is_sensitive: bool = False
+    expected_value: Optional[str] = None
+    checkpoint_instructions: Optional[str] = None
+    needs_review: bool = False
+    review_note: Optional[str] = None
+    lease_token: str
+    idempotency_key: Optional[str] = None
+
+
+class RecordedStepUpdate(BaseModel):
+    step_type: Optional[str] = None
+    description: Optional[str] = None
+    locator_strategy: Optional[str] = None
+    locator_value: Optional[str] = None
+    input_value: Optional[str] = None
+    is_sensitive: Optional[bool] = None
+    expected_value: Optional[str] = None
+    checkpoint_instructions: Optional[str] = None
+    needs_review: Optional[bool] = None
+    review_note: Optional[str] = None
+
+
+class RecordedStepReorderRequest(BaseModel):
+    step_ids_in_order: list[int]
+
+
+class RecordingSessionClaimOut(BaseModel):
+    claimed: bool
+    session: Optional[RecordingSessionOut] = None
+    lease_token: Optional[str] = None
+
+
+class RecorderHeartbeatRequest(BaseModel):
+    lease_token: str
+    paused_ack: Optional[bool] = None
+
+
+class SaveAsDraftRequest(BaseModel):
+    revision_label: str
+    change_summary: Optional[str] = None
+
+
+class InsertCheckpointRequest(BaseModel):
+    checkpoint_instructions: str
+
+
+class LocatorTestResultSubmit(BaseModel):
+    """Posted by the runner after evaluating a requested locator test
+    against the still-live recording browser -- the exact same
+    resolveLocator() code path replay uses, so a "tests OK" result here
+    is genuinely proven, not a separate guess."""
+
+    matched_count: int
+    ok: bool
+    message: Optional[str] = None
+    lease_token: str

@@ -1,191 +1,197 @@
-# Session Handoff — Hybrid MVP delivery, paused after HYB-2
+# Session Handoff — Hybrid MVP delivery, paused after HYB-3
 
 Written 2026-08-02. This is a **deliberate clean stop between phases**,
 not a crash or a discovered blocker — see "Why stopped here" below.
-Supersedes the previous version of this file (written after HYB-1).
+Supersedes the previous version of this file (written after HYB-2).
 
 ## Current state
 
 - **Branch**: `feature/hybrid-mvp`
-- **HYB-1 completion commit**: `8d64495`
-- **HYB-2 completion commit**: recorded at the end of this session (see
-  the commit this file was pushed alongside — check `git log --oneline
-  -1 feature/hybrid-mvp` for the exact hash after push).
+- **HYB-1 commit**: `8d64495`
+- **HYB-2 commit**: `0071a23`
+- **HYB-3 commit**: recorded at the end of this session — check
+  `git log --oneline -1 feature/hybrid-mvp` for the exact hash after
+  push (committed and pushed immediately after this file).
 - **`main`** is at `bb2f539` — unaffected; all hybrid work lives only on
   `feature/hybrid-mvp`.
 - **`track-a-baseline` tag**: `bb2f539`.
 - Working tree: clean except `docs/Autonomous hybird prompt.md` (the
   user's own file, intentionally left untouched/unstaged throughout).
 
-## HYB-1 — complete (unchanged from the previous handoff, not re-verified this session, not re-touched)
+## HYB-1 and HYB-2 — complete, unchanged, not re-verified this session
 
-See the previous handoff's content, preserved in git history
-(`8d64495`). Do not redo, rewrite, or re-verify it.
+See prior handoff content preserved in git history (`8d64495`,
+`0071a23`) and `docs/ROADMAP.md`. Do not redo, rewrite, or re-verify.
 
-## HYB-2 — complete and verified this session
+## HYB-3 — complete and verified this session
 
 **Files**:
-- `backend/app/models.py` — `RunnerToken` extended (additive) with
-  `runner_name`/`runner_version`/`os_metadata`/`browser_version`/
-  `capabilities_json`/`last_heartbeat_at`; `EvidenceItem` extended
-  (additive) with nullable `workflow_run_id`/`workflow_step_run_id`;
-  new `WorkflowRun`, `WorkflowStepRun`, `RunnerExecutionEvent` tables.
-- `backend/app/schemas.py` — matching schemas
-  (`WorkflowRunOut`/`WorkflowRunDetailOut`/`WorkflowStepRunOut`/
-  `RunnerExecutionEventOut`/`WorkflowRunClaimOut`/etc.,
-  `RunnerRegistrationOut`).
-- `backend/app/database.py` — `MASTER_COLUMN_PATCHES["runner_tokens"]`,
-  `PROJECT_COLUMN_PATCHES["evidence_items"]`, new `PROJECT_INDEXES`
-  entries for the three new tables.
-- `backend/app/auth.py` — `get_current_runner` now touches
-  `last_heartbeat_at` on every authenticated runner call;
-  `revoke_runner_token` added.
-- `backend/app/routers/runner_tokens.py` — rewritten: list (admin,
-  computed ONLINE/STALE/OFFLINE/REVOKED status), revoke (admin).
-  Create endpoint unchanged.
-- `backend/app/routers/workflow_runs.py` — new. The full job-claim
-  protocol: queue, list, detail, claim, heartbeat, events (idempotent),
-  step-runs (start/finish), evidence upload (reuses real
-  `EvidenceStorage`), complete, cancel. `_require_user_or_runner` added
-  for the one endpoint (`GET /{run_id}`) both the runner and the human
-  UI need to read.
+- `backend/app/models.py` — `RecordingSession`, `RecordedStep` (project-
+  scoped, same claim/lease shape as `WorkflowRun`).
+- `backend/app/schemas.py` — matching schemas.
+- `backend/app/database.py` — new `PROJECT_INDEXES` entries.
+- `backend/app/routers/recording_sessions.py` — new. Full protocol:
+  create/list/detail, pause/resume/stop/discard, insert-checkpoint,
+  edit/delete/reorder recorded steps, test-locator request/result,
+  save-as-draft (reuses `workflows.py::_validate_step_fields`), and the
+  runner-facing claim/heartbeat/append-step/pending-locator-tests
+  endpoints. `_require_user_or_runner` (same dual-credential pattern as
+  HYB-2) on the one endpoint both sides read.
 - `backend/app/main.py` — router wired in.
-- `backend/tests/test_workflow_runs.py` — new, 7 tests, all passing.
-- `runner/src/api/executionClient.ts` — new job-protocol client.
-- `runner/src/execution/locators.ts` — structured locator resolution +
-  sensitive-value `${VAR}` resolution + failure categorization.
-- `runner/src/execution/executor.ts` — real step execution against a
-  persistent Playwright page, claim/execute loop, checkpoint pause.
-- `runner/src/executeMain.ts` — new entry point (`npm run execute`).
-  `runner/src/main.ts` (HYB-0 `npm run spike`) is **untouched**.
-- `runner/package.json` — added the `execute` script.
-- `frontend/src/pages/RunnerList.jsx` — new, admin-only runner
-  management (register/list/revoke, live status).
-- `frontend/src/pages/WorkflowDetail.jsx` — added a "Runs" panel (queue,
-  live-polling list, expandable step-run/event detail, cancel).
-- `frontend/src/pages/ProjectList.jsx`, `App.jsx` — `/runners` route +
-  nav link wired in.
-- `docs/ROADMAP.md` — updated with full HYB-2 detail.
+- `backend/tests/test_recording_sessions.py` — new, 5 tests, all
+  passing.
+- `runner/src/recorder/domRecorder.ts` — new. The in-page recording
+  script (injected via `page.addInitScript`).
+- `runner/src/recorder/recordSession.ts` — new. Node-side orchestration:
+  claim, launch, inject, expose bridge, poll loop (heartbeat/pause-
+  resume/pending-locator-tests), close on STOPPED/DISCARDED.
+- `runner/src/api/recordingClient.ts` — new. HTTP client for the
+  recording-session protocol.
+- `runner/src/recordMain.ts` — new entry point (`npm run record`).
+  `main.ts` (`npm run spike`) and `executeMain.ts` (`npm run execute`)
+  are **untouched**.
+- `runner/package.json` — added the `record` script.
+- `frontend/src/components/RecordingPanel.jsx` — new. The tester's
+  remote control (Start/Pause/Resume/Stop/Discard, live step list,
+  insert-checkpoint, per-step locator testing, review/edit/reorder,
+  save-as-draft).
+- `frontend/src/pages/WorkflowDetail.jsx`, `api/client.js` — wired in.
+- `docs/ROADMAP.md` — updated with full HYB-3 detail.
 
-**Design/scope decisions made this phase** (documented in code
-comments, not silent):
-- One `RunnerToken` row = one runner identity+credential (no separate
-  `runners` table) — matches HYB-0's original decision, just extended
-  with the fields HYB-2 needs.
-- Lease lives directly on `WorkflowRun` (`lease_token`/
-  `lease_expires_at`), not a separate `RunnerLease` table — a run has
-  at most one active claim at a time in this MVP (no multi-runner
-  fan-out per job), so a 1:1 table would be overhead without a use.
-- Lease expiry is a **lazy sweep** (`_expire_stale_leases`, called at
-  the top of every relevant endpoint), not a background cron/scheduler
-  — no new dependency, and it self-heals on the very next API call
-  against the project, which is sufficient for this MVP's scale.
-- `MANUAL_CHECKPOINT` steps cause the runner to pause and exit cleanly
-  (posts `CHECKPOINT_WAITING`, does not advance further, does not call
-  `/complete`) rather than building fake resume semantics — full
-  checkpoint pause/resume with a human decision UI is explicitly HYB-4's
-  objective, not HYB-2's.
-- Evidence upload requires the run to carry a `cycle_test_result_id`
-  (checked, 400 if absent) — preserves `EvidenceItem`'s existing NOT
-  NULL `cycle_id`/`cycle_test_result_id` columns completely unchanged
-  rather than weakening them for standalone runs.
+**Architecture decision**: recording happens inside a browser the QA
+Runner process itself launches (a genuinely separate browser window
+from whatever the tester's own everyday browser is doing) — the
+tester's frontend is the *remote control*, not the recorded surface
+itself. This is what the hybrid prompt's "operate only inside the
+controlled Playwright browser session" requirement means in practice.
+`RecordingSession`/`RecordedStep` are a separate, editable, discardable
+draft buffer — "Save as Draft" is a distinct, explicit action that
+reuses HYB-1's own revision/step-creation code one field at a time, so
+a saved recording is indistinguishable from a hand-built draft, not a
+parallel code path with its own bugs to keep in sync.
 
-**Bugs found and fixed via the real end-to-end run** (not code review):
-1. `GET /workflow-runs/{id}` required a user session; the runner's own
-   cancel-check poll only holds a token → 401. Fixed with
-   `_require_user_or_runner` (same dual-credential pattern as HYB-0's
-   `hybrid.py::get_run`).
-2. `ASSERT_TEXT`/`ASSERT_URL` checked the page exactly once immediately
-   after a `CLICK`, before the SPA finished navigating → false failure.
-   Fixed with `pollUntil()`, retrying within the step's timeout.
+**Four real bugs found and fixed via the actual real recording run,
+not code review** (see `docs/ROADMAP.md`'s HYB-3 entry for full detail
+on each):
+1. First NAVIGATE raced the session's still-CLAIMED status.
+2. `<select>`'s accessible-name fallback used raw `textContent`,
+   concatenating every `<option>` — produced an unresolvable locator.
+3. **The in-page script's own source had an unescaped `\s` inside an
+   outer JS template literal** — an unrecognized string escape that
+   silently dropped the backslash, so the browser-side regex became
+   `/s+/g` instead of `/\s+/g`, replacing every literal "s" with a
+   space ("Test" → "Te t"). Caught by a real replay `TIMEOUT`, not by
+   inspection — worth remembering if you write more inline scripts as
+   JS string literals in this codebase.
+4. A genuine event-ordering race between the in-page click bridge and
+   Playwright's own `framenavigated` listener (two independent async
+   paths) — fixed with a single Node-side FIFO queue.
 
-**Verification**:
-- Backend: `pytest` — **52/52 passing** (45 carried from HYB-1 + 7 new),
-  fresh `.venv`.
-- Frontend: `npm run build` — clean, fresh `node_modules`.
-- Runner: `tsc --noEmit` — clean, fresh `node_modules`.
-- **Real end-to-end execution, not mocked**: registered a real runner
-  token, queued a real run against a published workflow revision (a
-  real login flow: NAVIGATE → FILL email → FILL a sensitive
-  `${RUNNER_LOGIN_PASSWORD}` placeholder → CLICK Sign in → ASSERT_TEXT
-  "Projects" → SCREENSHOT) linked to a real Track A cycle result, ran
-  the real Node.js/TypeScript process (`npm run execute`) which
-  launched real headed Chromium and executed every step for real
-  against the real running frontend+backend. First attempt genuinely
-  failed at the ASSERT_TEXT race (bug 2 above) and was caught by a
-  real lease-expiry timeout that correctly marked the crashed attempt
-  `RUNNER_LOST` (proving that mechanism works too) — the *second*
-  attempt, after the fix, PASSED end to end. Confirmed via the API
-  (structured step-run rows, a real 21,677-byte PNG evidence item
-  visible through Track A's own evidence endpoint,
-  `evidence_source=RUNNER`) and via a real headed-browser Playwright
-  pass through the actual `RunnerList`/`WorkflowDetail` UI.
+**Verification**: 57/57 backend pytest (52 + 5 new), fresh `.venv`.
+Frontend build clean, fresh `node_modules`. Runner `tsc --noEmit`
+clean, fresh `node_modules`. Real end-to-end: attached to the runner's
+own launched browser via its loopback CDP debug port (opt-in,
+`RECORDER_DEBUG_PORT` env var — same mechanism `playwright codegen`
+uses) to simulate a real tester interacting with it — real login (text
+input + sensitive password, never persisted, confirmed by grepping the
+raw SQLite DB file bytes and every log file for the literal password:
+zero matches), real page transitions, a real dropdown selection, a real
+checkbox, a manual checkpoint insertion, two real locator tests (one
+matched, one on a since-navigated-away element honestly reported 0
+matches), locator survival proven across a real viewport-resize
+reflow, stop → review → edit → save as DRAFT → publish → **replayed
+through the real HYB-2 runner: all 12 automated steps PASSED for real**,
+correctly pausing at the `MANUAL_CHECKPOINT` (full resume is HYB-4
+scope). Screenshot evidence in this session's scratchpad shows the
+published revision's exact step list (with the sensitive field showing
+only `${SECRET_LOGIN_PASSWORD}`, never a real value) and both replay
+attempts' real outcomes (`FAILED` before the bug fixes, `PASSED`
+through `WAITING_FOR_HUMAN` after).
 
 ## Current in-progress phase
 
-**None.** HYB-3 has not been started.
+**None.** HYB-4 has not been started.
 
 ## Not yet done
 
-- HYB-3: browser workflow recorder (semantic locator capture from real
-  DOM interactions, sensitive-input detection/redaction, noise
-  reduction, recorder UI, draft-workflow generation, replay-by-HYB-2
-  verification).
-- HYB-4: manual checkpoints and hybrid evidence — this is where
-  `MANUAL_CHECKPOINT`'s pause (built in HYB-2, not resumable yet) gets
-  a real human-decision resume flow, and where the
-  `HYB-1-GAP-ANALYSIS-REFRESH.md` evidence-reuse decision gets its
-  `checkpoint_decision_id` link once a checkpoint-decision table exists.
+- HYB-4: manual checkpoints and hybrid evidence. This is where
+  `MANUAL_CHECKPOINT`'s pause (proven working in both HYB-2 and HYB-3's
+  replay) gets a real human-decision resume flow: `WAITING_FOR_HUMAN` →
+  human PASS/FAIL/BLOCKED/N-A decision (with real actor identity +
+  timestamp) → resume in the *same* browser session the runner already
+  kept alive, or an honest `RUNNER_LOST` if it genuinely died. Also
+  where the `HYB-1-GAP-ANALYSIS-REFRESH.md` evidence-reuse decision
+  gets its `checkpoint_decision_id` link once a checkpoint-decision
+  table exists (the `EvidenceItem.workflow_run_id`/
+  `workflow_step_run_id` columns from HYB-2 are already there and
+  already proven working — HYB-3's own replay uploaded no evidence
+  since none of its steps were `SCREENSHOT`, but HYB-2's original
+  verification already proved that path end-to-end).
 - HYB-5: timing, reports, `HYBRID_RUNNER_THREAT_MODEL.md`, recovery
-  docs, user guides.
+  docs, user guides, 50+-step realistic workflow verification.
 
 ## Why stopped here
 
-Same reasoning as the HYB-1→HYB-2 stop: HYB-3 (a real browser action
-recorder — capturing live DOM interactions into semantic locators,
-detecting and redacting sensitive fields, noise-reduction heuristics,
-a full recorder UI) is another substantial, genuinely new subsystem
-that deserves its own full build-and-verify pass rather than being
-compressed into the same session as HYB-2's real-runner debugging.
-This is a deliberate stop at a clean phase boundary per the user's own
-documented fallback instruction, applied proactively.
+Same reasoning as the prior two stops in this delivery: HYB-4 (real
+human-decision resume within a live, already-paused browser session,
+decision-conflict protection, honest lost-session recovery) is another
+substantial, safety-critical subsystem — this is the phase where "a
+later automated step must never override a human FAIL" actually gets
+implemented and needs to be proven, not just asserted. It deserves its
+own full build-and-verify pass rather than being compressed into the
+same session as HYB-3's real debugging (four real bugs found and fixed
+this session already). Deliberate stop at a clean phase boundary per
+the user's own documented fallback instruction, applied proactively.
 
 ## Exact next implementation step
 
-1. Read this file in full — HYB-2's job-claim protocol, runner client,
-   and executor are what HYB-3's recorder must produce output
-   compatible with (a `WorkflowRevision` + ordered `WorkflowStep` rows
-   with structured locators, ready to `/claim` and execute exactly like
-   the hand-written test workflow this session executed for real).
-2. Read `docs/Autonomous hybird prompt.md`'s HYB-3 section in full —
-   the recorder-safety rules (browser-session-only recording, no
-   OS-level keylogging, semantic locators not raw coordinates, never
-   persist real passwords/OTPs/tokens, noise reduction without silent
-   behavior changes) are non-negotiable constraints, not suggestions.
-3. Design where recording happens: almost certainly the QA Runner
-   process (`runner/`) attaches Playwright's own action-recording
-   capability (or a custom `page.exposeFunction`/CDP-based listener) to
-   a browser session it launches itself — never a browser extension or
-   global OS hook. Decide and document this before writing code.
-4. Design the sensitive-field detector (input `type="password"`,
-   `autocomplete` attribute, name/label pattern matching) and confirm
-   it reuses the exact `${VAR_NAME}` placeholder convention
-   `workflow_steps.input_value`/`is_sensitive` already established in
-   HYB-1/HYB-2 — do not invent a second convention.
-5. Recorder output must be a DRAFT `WorkflowRevision` (via HYB-1's
-   existing `POST /workflows/{id}/revisions` + step-creation endpoints)
-   — never auto-published. A human reviews and publishes manually,
-   exactly like every other DRAFT→PUBLISHED flow in this app.
-6. Full gate: backend pytest, frontend build, runner
-   build/typecheck, then a real headed-browser recording session
-   (record a real flow with a password field, confirm the raw password
-   never appears in the resulting workflow JSON or any log line, confirm
-   the recorded draft can be published and then actually executed by
-   HYB-2's real runner against the same target app).
-7. Update `docs/ROADMAP.md`, write a fresh
-   `docs/hybrid/SESSION_HANDOFF.md` (or append if HYB-3 also stops
-   between phases), commit, push to `feature/hybrid-mvp`, record the
-   hash, proceed to HYB-4 under the same discipline.
+1. Read this file in full, and `docs/ROADMAP.md`'s HYB-2/HYB-3 entries
+   — the `MANUAL_CHECKPOINT` pause mechanics (runner posts
+   `CHECKPOINT_WAITING`, sets `WAITING_FOR_HUMAN`, exits its execution
+   loop cleanly without calling `/complete`) already exist and are
+   proven; HYB-4 builds the *resume* side on top, it doesn't rebuild
+   the pause side.
+2. Read `docs/Autonomous hybird prompt.md`'s HYB-4 section in full —
+   note the explicit trust-model requirements: a human FAIL must never
+   become an automatic PASS later; every decision needs real identity +
+   timestamp; decision-conflict protection (two testers racing to
+   decide the same checkpoint) is required, not optional.
+3. Design a `CheckpointDecision` model (project-scoped) — likely very
+   close in shape to the HYB-0 spike's `HybridCheckpointDecision`
+   (append-only, one row per decision, `decided_by`/`decided_at`) but
+   tied to `WorkflowRun`/`WorkflowStepRun` instead of the spike's
+   `HybridRun`. Add `EvidenceItem.checkpoint_decision_id` (nullable,
+   additive) once this table exists — this is the column
+   `HYB-1-GAP-ANALYSIS-REFRESH.md` deferred specifically to this phase.
+4. The resume protocol: a `POST /workflow-runs/{id}/checkpoint-decision`
+   (user session, not runner token) records the decision; the *runner*
+   (which has been polling/heartbeating while paused, keeping its
+   lease alive and its browser session alive) observes the decision on
+   its next poll and either continues executing subsequent steps
+   (PASS) or calls `/complete` with the decision's outcome (FAIL/
+   BLOCKED/N-A) — mirroring HYB-0's `waitForHumanDecision` pattern but
+   against the real `WorkflowRun` protocol instead of the spike's
+   `HybridRun` one.
+5. Decision-conflict protection: the decision endpoint must reject a
+   second decision once the run has already left `WAITING_FOR_HUMAN`
+   (same "first commit wins" pattern already used elsewhere in this
+   app, e.g. quota race self-eviction).
+6. Honest lost-session handling: if the runner's lease expires while
+   `WAITING_FOR_HUMAN` (currently `WORKFLOW_RUN_LEASED_STATUSES`
+   deliberately excludes `WAITING_FOR_HUMAN` from lease tracking — this
+   needs revisiting for HYB-4, since a runner that crashed while paused
+   needs to be detected too, just on a different/longer timeout than
+   the active-execution lease).
+7. Full gate: backend pytest, frontend build, runner build/typecheck,
+   then a real headed-browser + real runner verification: pause at a
+   checkpoint, make a real PASS decision, confirm the *same* browser
+   session resumes (not a fresh restart) and continues; repeat with a
+   real FAIL decision and confirm a later automated step genuinely
+   cannot overwrite it; simulate the runner dying while paused and
+   confirm honest `RUNNER_LOST` handling, not a fabricated continuation.
+8. Update `docs/ROADMAP.md`, write a fresh
+   `docs/hybrid/SESSION_HANDOFF.md`, commit, push to
+   `feature/hybrid-mvp`, record the hash, proceed to HYB-5.
 
 ## Exact commands to resume
 
@@ -193,13 +199,13 @@ documented fallback instruction, applied proactively.
 cd d:/git/PM-QA-Again
 git checkout feature/hybrid-mvp
 git pull origin feature/hybrid-mvp
-git log --oneline -5   # confirm HYB-2's commit is at or near HEAD
+git log --oneline -5   # confirm HYB-3's commit is at or near HEAD
 
 # Backend
 cd backend
 python -m venv .venv
 ./.venv/Scripts/pip install -r requirements-dev.txt
-./.venv/Scripts/python -m pytest -q   # expect 52 passed
+./.venv/Scripts/python -m pytest -q   # expect 57 passed
 
 # Frontend
 cd ../frontend
@@ -213,36 +219,39 @@ npm run typecheck   # expect clean
 npx playwright install chromium   # if not already cached
 ```
 
-To manually re-verify HYB-2's real execution (optional, already proven
-this session): start backend+frontend, create a project/workflow/cycle
-via curl (see this session's transcript or re-derive from
-`backend/app/routers/workflow_runs.py`'s docstring), issue a runner
-token via `POST /api/runner-tokens`, write `runner/.env` (gitignored —
-`BACKEND_BASE_URL`, `PROJECT_SLUG`, `RUNNER_TOKEN`, `TARGET_BASE_URL`,
-plus whatever `${VAR}` names your test workflow's sensitive steps
-reference), queue a run, `npm run execute`.
+To manually re-verify HYB-3's real recording (optional, already proven
+this session): start backend+frontend, create a project/workflow via
+curl, issue a runner token, write `runner/.env` (gitignored) with
+`RECORDER_DEBUG_PORT=9223` plus the usual `BACKEND_BASE_URL`/
+`PROJECT_SLUG`/`RUNNER_TOKEN`/`TARGET_BASE_URL`, `npm run record` in
+one terminal, create a recording session via the frontend's "Start
+Recording" button, then `chromium.connectOverCDP('http://127.0.0.1:9223')`
+from a separate script to simulate a tester interacting with the
+recorder's browser window.
 
 ## Continuation prompt (copy-paste into a fresh session)
 
 ```
 Continue the QA-Again Hybrid MVP delivery. Read
 docs/hybrid/SESSION_HANDOFF.md in full first -- it has the exact
-current state, what HYB-1 and HYB-2 completed and verified (including
-two real bugs found via an actual end-to-end runner execution, not
+current state, what HYB-1/HYB-2/HYB-3 completed and verified (including
+four real bugs found via an actual end-to-end recording+replay run, not
 code review), and the precise next step. Branch is feature/hybrid-mvp.
-Do not start over or re-verify HYB-1/HYB-2 (already done: 52/52 backend
-tests, frontend build clean, runner typecheck clean, a real Node.js
-runner process really executed a real login workflow against real
-headed Chromium end to end, with real screenshot evidence recorded
-through the actual EvidenceStorage system). Begin HYB-3 (browser
-workflow recorder) per docs/Autonomous hybird prompt.md's HYB-3
-section, following the same discipline as HYB-1/HYB-2: real
-FastAPI/SQLite/Node.js/TypeScript/Playwright behavior only, no mocked
-output as completion evidence, full backend/frontend/runner gates plus
-real-browser verification (including a live recording session with a
-password field, confirming the raw password never appears anywhere in
-the output) before considering the phase done. Commit and push HYB-3
-separately. Release Closure's three human-operated checks remain
-unresolved and the project remains NOT PRODUCTION READY regardless of
-hybrid progress -- do not claim otherwise.
+Do not start over or re-verify HYB-1/HYB-2/HYB-3 (already done: 57/57
+backend tests, frontend build clean, runner typecheck clean, a real
+Node.js recorder process really captured a real tester's interactions
+in a real separate Chromium window including a genuinely sensitive
+password field -- confirmed never persisted anywhere -- and the saved,
+published recording replayed successfully through the real HYB-2
+runner). Begin HYB-4 (manual checkpoints and hybrid evidence) per
+docs/Autonomous hybird prompt.md's HYB-4 section, following the same
+discipline as HYB-1/HYB-2/HYB-3: real FastAPI/SQLite/Node.js/
+TypeScript/Playwright behavior only, no mocked output as completion
+evidence, full backend/frontend/runner gates plus real-browser
+verification (including proving a human FAIL cannot later be
+overwritten by automation, and honest RUNNER_LOST handling if the
+runner dies mid-pause) before considering the phase done. Commit and
+push HYB-4 separately. Release Closure's three human-operated checks
+remain unresolved and the project remains NOT PRODUCTION READY
+regardless of hybrid progress -- do not claim otherwise.
 ```

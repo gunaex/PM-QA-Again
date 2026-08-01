@@ -23,6 +23,7 @@ import {
 } from '../api/client'
 import { useAuth } from '../auth/AuthContext.jsx'
 import StatusBadge from '../components/StatusBadge.jsx'
+import RecordingPanel from '../components/RecordingPanel.jsx'
 
 const STEP_TYPES = [
   'NAVIGATE', 'CLICK', 'FILL', 'SELECT', 'CHECK', 'UNCHECK', 'PRESS_KEY',
@@ -237,6 +238,16 @@ export default function WorkflowDetail() {
       </NavLink>
       <h2 className="text-xl font-semibold text-gray-900">{workflow.name}</h2>
       {error && <p className="text-xs text-red-600">{error}</p>}
+
+      <RecordingPanel
+        slug={slug}
+        workflowId={workflowId}
+        canEdit={canEdit}
+        onDraftSaved={(revision) => {
+          setRevisions((prev) => [revision, ...prev])
+          setSelectedRevisionId(revision.id)
+        }}
+      />
 
       <div className="grid grid-cols-1 lg:grid-cols-[240px_1fr] gap-4">
         {/* Revision list */}

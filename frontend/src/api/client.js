@@ -233,4 +233,28 @@ export const listRunnerTokens = () => api.get('/runner-tokens').then((r) => r.da
 export const createRunnerToken = (label) => api.post('/runner-tokens', { label }).then((r) => r.data)
 export const revokeRunnerToken = (tokenId) => api.put(`/runner-tokens/${tokenId}/revoke`).then((r) => r.data)
 
+// Recording sessions (HYB-3)
+export const listRecordingSessions = (slug) => api.get(`/${slug}/recording-sessions`).then((r) => r.data)
+export const createRecordingSession = (slug, workflowId, targetUrl) =>
+  api.post(`/${slug}/recording-sessions`, { workflow_id: workflowId, target_url: targetUrl }).then((r) => r.data)
+export const getRecordingSession = (slug, sessionId) => api.get(`/${slug}/recording-sessions/${sessionId}`).then((r) => r.data)
+export const pauseRecordingSession = (slug, sessionId) => api.post(`/${slug}/recording-sessions/${sessionId}/pause`).then((r) => r.data)
+export const resumeRecordingSession = (slug, sessionId) => api.post(`/${slug}/recording-sessions/${sessionId}/resume`).then((r) => r.data)
+export const stopRecordingSession = (slug, sessionId) => api.post(`/${slug}/recording-sessions/${sessionId}/stop`).then((r) => r.data)
+export const discardRecordingSession = (slug, sessionId) => api.post(`/${slug}/recording-sessions/${sessionId}/discard`).then((r) => r.data)
+export const insertRecordingCheckpoint = (slug, sessionId, checkpointInstructions) =>
+  api.post(`/${slug}/recording-sessions/${sessionId}/insert-checkpoint`, { checkpoint_instructions: checkpointInstructions }).then((r) => r.data)
+export const updateRecordedStep = (slug, sessionId, stepId, payload) =>
+  api.put(`/${slug}/recording-sessions/${sessionId}/steps/${stepId}`, payload).then((r) => r.data)
+export const deleteRecordedStep = (slug, sessionId, stepId) =>
+  api.delete(`/${slug}/recording-sessions/${sessionId}/steps/${stepId}`).then((r) => r.data)
+export const reorderRecordedSteps = (slug, sessionId, stepIdsInOrder) =>
+  api.post(`/${slug}/recording-sessions/${sessionId}/steps/reorder`, { step_ids_in_order: stepIdsInOrder }).then((r) => r.data)
+export const requestLocatorTest = (slug, sessionId, stepId) =>
+  api.post(`/${slug}/recording-sessions/${sessionId}/steps/${stepId}/test-locator`).then((r) => r.data)
+export const saveRecordingAsDraft = (slug, sessionId, revisionLabel, changeSummary) =>
+  api
+    .post(`/${slug}/recording-sessions/${sessionId}/save-as-draft`, { revision_label: revisionLabel, change_summary: changeSummary })
+    .then((r) => r.data)
+
 export default api

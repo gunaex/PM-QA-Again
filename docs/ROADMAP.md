@@ -304,7 +304,7 @@ proceed on a dedicated `feature/hybrid-mvp` branch while Release Closure
 remains open. Production readiness is **not** claimed regardless of how
 much HYB work completes; see Track B below for HYB-1's actual status.
 
-## Track B — Hybrid manual+automation expansion (HYB-0–HYB-2 complete; HYB-3–HYB-5 pending)
+## Track B — Hybrid manual+automation expansion (HYB-0–HYB-3 complete; HYB-4–HYB-5 pending)
 
 Full detail lives in `QA_AGAIN_HYBRID_AI_QA_MVP_EXPANSION.md`; this is
 the index. QA-Again gains a separate **QA Runner** (Node.js + Playwright,
@@ -474,9 +474,95 @@ Delivery sequence after the spike:
   runs — `RUNNER_LOST`, `FAILED`, `PASSED` — listed with correct status,
   step-by-step results, and provenance-tagged event history). See
   `docs/hybrid/SESSION_HANDOFF.md` for the full verification record.
-- **HYB-3** — recorder (record session, semantic locator capture,
-  sensitive-input handling, draft workflow generation, locator warnings,
-  tester review before publish).
+- **HYB-3** — browser workflow recorder. **Done, 2026-08-02** — branch
+  `feature/hybrid-mvp`. New `RecordingSession`/`RecordedStep` tables
+  (project-scoped) with the exact same outbound-only claim/lease
+  protocol as `WorkflowRun` (HYB-2) — a session is a claimable job, not
+  a push target. Recording happens strictly inside a Playwright browser
+  the QA Runner itself launches (`runner/src/recorder/domRecorder.ts`,
+  an in-page script injected via `page.addInitScript`) — never the
+  tester's own browser, never a global OS hook. Captures click,
+  change (debounced to one FILL/SELECT/CHECK/UNCHECK per edit, not per
+  keystroke), and a narrow keydown allow-list (Enter/Escape outside text
+  fields) — no `mousemove` listener exists anywhere in the file. Ranked
+  locator generation follows the documented priority (`TEST_ID` → `ROLE`
+  +name → `LABEL` → `PLACEHOLDER` → `TEXT` → `CSS` → `XPath`), with
+  diagnostic x/y coordinates stored only as optional metadata, never as
+  a locator strategy. Sensitive-field detection (password type,
+  autocomplete, name/label pattern match) redacts **in-page, before the
+  value ever crosses the Node bridge** — `RecordedStepCreate.input_value`
+  is `undefined` (not empty-string) for a sensitive field, and the
+  backend rejects outright any attempt to send one
+  (`recording_sessions.py::append_recorded_step`). A file-input change
+  is recorded as a `MANUAL_CHECKPOINT` (file-upload automation is out of
+  scope; the real local path is never captured, not even the filename).
+  Tester control plane (`RecordingPanel.jsx`): Start/Pause/Resume/Stop/
+  Discard, live-polling captured-step list, insert-a-checkpoint,
+  per-step "Test locator" (the runner evaluates the exact same
+  `resolveLocator()` replay uses against the still-live page and reports
+  match count honestly — 0 matches if the target is genuinely gone),
+  edit/delete/reorder once STOPPED, and **Save as Draft** — which reuses
+  HYB-1's own revision/step-creation code path and its exact validation
+  (`_validate_step_fields`), so a recorded draft is indistinguishable
+  from a hand-built one. Stopping never auto-publishes; the tester
+  publishes manually like any other draft.
+
+  **Three real bugs found and fixed via the actual real recording run,
+  not code review** (all in `runner/src/recorder/`): (1) the very first
+  NAVIGATE (fired by the recorder's own initial `page.goto`) raced the
+  session's still-CLAIMED status and was rejected — fixed by marking
+  RECORDING before that navigation. (2) `accessibleName()`'s text
+  fallback used a `<select>`'s raw `textContent`, which silently
+  concatenates every `<option>`'s text — produced a locator that could
+  never resolve; fixed by excluding form controls from the text-fallback
+  path entirely (falls through to an honestly-flagged CSS locator
+  instead of a fabricated one). (3) **the in-page script's own source
+  contained `\s`/`\b` inside an outer JS template literal without double-
+  escaping — an unrecognized string escape sequence, so the browser-side
+  regex silently became `/s+/g` instead of `/\s+/g`, replacing every run
+  of the literal letter "s" with a space** ("HYB3 Test Project" →
+  "HYB3 Te t Project") — caught by a real replay `TIMEOUT` failure
+  (`getByRole('button', {name: 'HYB3 Te t Project...'})` never matched),
+  fixed by correcting the escaping and adding a `flatText()` helper that
+  also fixes proper whitespace-joining between child text nodes (raw
+  `textContent` doesn't insert the spaces a real accessible-name
+  computation does, which had separately caused a multi-word button's
+  locator to fail to match too). (4) a genuine **event-ordering race**:
+  click events reach Node via the in-page `exposeFunction` bridge while
+  NAVIGATE events reach Node via Playwright's own `framenavigated`
+  listener — two independent async paths whose network calls could
+  complete out of order, occasionally persisting a NAVIGATE before the
+  CLICK that caused it. Fixed with a single Node-side FIFO promise queue
+  (`enqueueAppend`) shared by both sources.
+
+  Verified: 5 new backend pytest tests (full protocol: claim, dual-
+  credential lease enforcement, sensitive-value rejection, idempotent-
+  ish step append, pause/resume gating, locator-test request/result,
+  stop → review → edit/delete/reorder → save-as-draft →
+  `_validate_step_fields` parity with manual authoring, discard wipes
+  the buffer, lease-expiry → `RUNNER_LOST`, VIEWER read-only boundary),
+  full suite **57/57** (52 + 5). Frontend build clean. Runner
+  `tsc --noEmit` clean. **Real end-to-end recording + replay, not
+  mocked**: attached to the QA Runner's own launched browser via its
+  loopback CDP debug port (opt-in, local-only —
+  `RECORDER_DEBUG_PORT`, the same mechanism `playwright codegen` itself
+  uses) to simulate a real tester — logged in for real (ordinary email
+  input + a genuinely sensitive password field), clicked through real
+  page transitions, selected a real dropdown option, checked a real
+  checkbox, inserted a manual checkpoint, requested two real locator
+  tests (one on a still-present element — matched, one on the Sign-in
+  button after navigating away — **honestly reported 0 matches**),
+  proved locator survival across a real viewport-resize-and-reflow,
+  stopped, reviewed, assigned the sensitive field's `${SECRET_LOGIN_
+  PASSWORD}` placeholder, saved as a draft, published, and replayed the
+  published revision through the real HYB-2 runner: **all 12 automated
+  steps PASSED for real** against the real running app, then correctly
+  paused at the `MANUAL_CHECKPOINT` (full resume is HYB-4 scope, exactly
+  as HYB-2 already documented). Confirmed **zero occurrences** of the
+  real password anywhere it could conceivably have leaked: grepped the
+  raw SQLite DB file bytes, the backend's request-timing log, and every
+  one of the runner's own console logs across all recording/replay
+  attempts this session — all clean.
 - **HYB-4** — hybrid checkpoint and evidence (pause/resume UI, manual
   decisions, screenshot capture/upload, annotation linkage, defect
   linkage, lost-runner handling).

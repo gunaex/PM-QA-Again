@@ -96,6 +96,9 @@ PROJECT_INDEXES: dict[str, list[str]] = {
     "workflow_runs": ["workflow_revision_id", "status", "cycle_test_result_id"],
     "workflow_step_runs": ["workflow_run_id"],
     "runner_execution_events": ["workflow_run_id"],
+    # HYB-3: recording-session claim/list and recorded-step ordering.
+    "recording_sessions": ["workflow_id", "status"],
+    "recorded_steps": ["recording_session_id"],
 }
 
 

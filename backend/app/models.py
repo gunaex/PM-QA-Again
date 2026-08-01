@@ -695,3 +695,80 @@ class RunnerExecutionEvent(ProjectBase):
     __table_args__ = (
         UniqueConstraint("workflow_run_id", "idempotency_key", name="uq_run_event_idempotency"),
     )
+
+
+# ---------- HYB-3: browser workflow recorder ----------
+# Recording happens only inside a Playwright browser the QA Runner
+# itself launches (never the tester's own everyday browser, never a
+# global OS hook) -- see runner/src/recorder/. A RecordingSession is a
+# claim/lease job exactly like WorkflowRun (same outbound-only /claim
+# protocol, same lease fields), except its payload is a buffer of
+# candidate RecordedStep rows for a human to review, not an execution.
+# Stopping recording never publishes anything -- "save as draft" is a
+# separate, explicit action that reuses HYB-1's own revision/step
+# creation code, so a recorded draft is indistinguishable from a
+# hand-built one once saved.
+
+RECORDING_SESSION_STATUSES = ("REQUESTED", "CLAIMED", "RECORDING", "PAUSED", "STOPPED", "DISCARDED", "SAVED", "RUNNER_LOST")
+RECORDING_SESSION_LEASED_STATUSES = ("CLAIMED", "RECORDING", "PAUSED")
+
+
+class RecordingSession(ProjectBase):
+    __tablename__ = "recording_sessions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    workflow_id = Column(Integer, ForeignKey("workflow_definitions.id"), nullable=False)
+    status = Column(String, default="REQUESTED")  # see RECORDING_SESSION_STATUSES
+    target_url = Column(String, nullable=False)
+    requested_by = Column(String, nullable=True)
+    runner_id = Column(Integer, nullable=True)  # RunnerToken.id (master DB) -- cross-DB, not a real FK
+    lease_token = Column(String, nullable=True)
+    lease_expires_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class RecordedStep(ProjectBase):
+    """One candidate step captured during a RecordingSession. Distinct
+    from WorkflowStep on purpose -- this is an editable, discardable
+    draft buffer; it only becomes a real WorkflowStep when the tester
+    explicitly saves the session (see recording_sessions.py::
+    save_as_draft)."""
+
+    __tablename__ = "recorded_steps"
+
+    id = Column(Integer, primary_key=True, index=True)
+    recording_session_id = Column(Integer, ForeignKey("recording_sessions.id"), nullable=False)
+    sequence_no = Column(Integer, nullable=False)
+    step_type = Column(String, nullable=False)  # see WORKFLOW_STEP_TYPES (HYB-1) -- same enum, no new types added
+    description = Column(String, nullable=True)
+    locator_strategy = Column(String, nullable=True)  # see LOCATOR_STRATEGIES (HYB-1)
+    locator_value = Column(String, nullable=True)
+    locator_fallbacks_json = Column(Text, nullable=True)
+    locator_warnings_json = Column(Text, nullable=True)  # e.g. ["no data-testid; matched by visible text"]
+    target_summary = Column(String, nullable=True)  # short, truncated element description -- never a full DOM dump
+    page_context = Column(String, nullable=True)  # URL path at capture time
+    # Coordinates are optional DIAGNOSTIC metadata only -- never used as
+    # a locator strategy value, never resolved against during replay.
+    diagnostic_x = Column(Integer, nullable=True)
+    diagnostic_y = Column(Integer, nullable=True)
+    input_value = Column(Text, nullable=True)  # never set (stays null) for is_sensitive rows
+    is_sensitive = Column(Boolean, default=False)
+    expected_value = Column(Text, nullable=True)
+    checkpoint_instructions = Column(Text, nullable=True)
+    needs_review = Column(Boolean, default=False)  # an uncertain noise-reduction simplification -- flagged, not silently applied
+    review_note = Column(String, nullable=True)
+    # "Test this locator" -- a tester requests it (while the recording
+    # browser is still alive), the runner picks it up on its next poll,
+    # evaluates it with the *same* resolveLocator() replay will use, and
+    # posts the result back. Simple request/result pair on the row
+    # itself rather than a separate table -- one outstanding test at a
+    # time per step is all the MVP needs.
+    locator_test_requested = Column(Boolean, default=False)
+    locator_test_result_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    # No DB-level uniqueness on (recording_session_id, sequence_no) --
+    # matches WorkflowStep's own reorder endpoint (HYB-1), which relies
+    # on application-level ordering rather than a constraint, precisely
+    # to avoid an intermediate collision while a batch of UPDATEs is
+    # mid-flight during a reorder.
