@@ -264,6 +264,15 @@ class EvidenceItem(ProjectBase):
     status = Column(String, default="ACTIVE")  # see EVIDENCE_STATUSES — archive, never delete
     evidence_source = Column(String, default="HUMAN")  # see RESULT_SOURCES — hybrid extension point, unused
     created_at = Column(DateTime, default=datetime.utcnow)
+    # HYB-2/HYB-1-gap-analysis decision 2: hybrid evidence reuses this
+    # table rather than a parallel subsystem. Both nullable — every
+    # Track A row leaves them null; a runner-captured screenshot sets
+    # workflow_run_id (+ workflow_step_run_id when tied to one specific
+    # step) and evidence_source=RUNNER. checkpoint_decision_id is
+    # deliberately NOT added yet — it would be meaningless until HYB-4's
+    # checkpoint-decision model exists to reference.
+    workflow_run_id = Column(Integer, nullable=True)
+    workflow_step_run_id = Column(Integer, nullable=True)
 
 
 class EvidenceRevision(ProjectBase):
@@ -332,9 +341,13 @@ CHECKPOINT_DECISIONS = ("PASS", "FAIL", "BLOCKED", "NOT_APPLICABLE")
 
 class RunnerToken(MasterBase):
     """A revocable credential a QA Runner process presents on every
-    request — deliberately not the full `runners` registration table
-    from the hybrid doc's section 8.5 (no heartbeat/capabilities/platform
-    yet, that's HYB-2). Stored hashed, same pattern as RefreshToken."""
+    request. HYB-0 shipped this as a bare credential; HYB-2 extends it
+    with the registration/heartbeat fields the hybrid doc's section 8.5
+    asks for (name/version/platform/capabilities/last heartbeat) rather
+    than introducing a second `runners` table — one runner process still
+    equals one token in this MVP, so splitting identity from credential
+    would be a distinction without a use yet. Stored hashed, same
+    pattern as RefreshToken."""
 
     __tablename__ = "runner_tokens"
 
@@ -343,6 +356,15 @@ class RunnerToken(MasterBase):
     token_hash = Column(String, nullable=False, index=True)
     revoked = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+    # HYB-2 registration/heartbeat fields — all nullable: a token minted
+    # before HYB-2 (or never yet used by a real runner process) simply
+    # has none of this filled in until the runner's first real call.
+    runner_name = Column(String, nullable=True)
+    runner_version = Column(String, nullable=True)
+    os_metadata = Column(String, nullable=True)
+    browser_version = Column(String, nullable=True)
+    capabilities_json = Column(Text, nullable=True)
+    last_heartbeat_at = Column(DateTime, nullable=True)
 
 
 class HybridRun(ProjectBase):
@@ -566,4 +588,110 @@ class WorkflowTestCaseLink(ProjectBase):
 
     __table_args__ = (
         UniqueConstraint("workflow_revision_id", "test_case_id", name="uq_workflow_revision_case"),
+    )
+
+
+# ---------- HYB-2: runner registration and execution ----------
+# See docs/hybrid/SESSION_HANDOFF.md and docs/Autonomous hybird prompt.md's
+# HYB-2 section. A WorkflowRun always targets a PUBLISHED WorkflowRevision
+# (enforced in the router, not the model) -- never a DRAFT, so a run's
+# steps can never change out from under it mid-execution.
+
+WORKFLOW_RUN_STATUSES = (
+    "QUEUED", "CLAIMED", "STARTING", "RUNNING", "PAUSED", "WAITING_FOR_HUMAN",
+    "RESUMING", "PASSED", "FAILED", "BLOCKED", "CANCELLED", "RUNNER_LOST", "SYSTEM_ERROR",
+)
+# Terminal: no further mutation, no further lease. WAITING_FOR_HUMAN is
+# deliberately NOT terminal (HYB-4 resumes it) and deliberately NOT
+# lease-tracked (a human deciding takes arbitrarily long; only the
+# runner's own active-execution window is lease-bound).
+WORKFLOW_RUN_TERMINAL_STATUSES = ("PASSED", "FAILED", "BLOCKED", "CANCELLED", "RUNNER_LOST", "SYSTEM_ERROR")
+WORKFLOW_RUN_LEASED_STATUSES = ("CLAIMED", "STARTING", "RUNNING")
+
+STEP_RUN_STATUSES = ("PENDING", "RUNNING", "PASSED", "FAILED", "SKIPPED")
+FAILURE_CATEGORIES = (
+    "LOCATOR_NOT_FOUND", "LOCATOR_AMBIGUOUS", "TIMEOUT", "NAVIGATION_ERROR",
+    "ASSERTION_FAILED", "INPUT_ERROR", "BROWSER_CRASH", "RUNNER_DISCONNECTED",
+    "CANCELLED", "SYSTEM_ERROR",
+)
+RUNNER_EXEC_EVENT_TYPES = (
+    "RUN_QUEUED", "RUN_CLAIMED", "STEP_STARTED", "STEP_COMPLETED", "STEP_FAILED",
+    "CHECKPOINT_WAITING", "HEARTBEAT", "RUN_CANCELLED", "RUN_COMPLETED", "RUNNER_LOST",
+)
+
+LEASE_DURATION_SECONDS = 60
+
+
+class WorkflowRun(ProjectBase):
+    """One execution of a published workflow revision. Lease fields
+    (`lease_token`/`lease_expires_at`) implement HYB-2's "time-limited
+    lease + renewal" requirement directly on the run rather than via a
+    separate lease table -- a run has at most one active claim at a
+    time in this MVP (no multi-runner fan-out), so a dedicated table
+    would track a 1:1 relationship a column pair already expresses."""
+
+    __tablename__ = "workflow_runs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    workflow_revision_id = Column(Integer, ForeignKey("workflow_revisions.id"), nullable=False)
+    # Optional: ties a hybrid run to a specific Track A cycle result, the
+    # real-world case evidence/results should flow into. A run with no
+    # cycle_test_result_id is a standalone workflow execution (e.g.
+    # testing the workflow itself) -- evidence upload requires this to
+    # be set (enforced in the router), preserving EvidenceItem's existing
+    # NOT NULL cycle_id/cycle_test_result_id invariant unchanged.
+    cycle_test_result_id = Column(Integer, ForeignKey("cycle_test_results.id"), nullable=True)
+    status = Column(String, default="QUEUED")  # see WORKFLOW_RUN_STATUSES
+    runner_id = Column(Integer, nullable=True)  # RunnerToken.id (master DB) -- cross-DB, not a real FK
+    lease_token = Column(String, nullable=True)
+    lease_expires_at = Column(DateTime, nullable=True)
+    cancel_requested = Column(Boolean, default=False)
+    queued_by = Column(String, nullable=True)
+    started_at = Column(DateTime, nullable=True)
+    ended_at = Column(DateTime, nullable=True)
+    result_summary = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class WorkflowStepRun(ProjectBase):
+    """One row per (attempted) step execution -- structured, queryable
+    history, distinct from the raw RunnerExecutionEvent log."""
+
+    __tablename__ = "workflow_step_runs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    workflow_run_id = Column(Integer, ForeignKey("workflow_runs.id"), nullable=False)
+    workflow_step_id = Column(Integer, ForeignKey("workflow_steps.id"), nullable=False)
+    sequence_no = Column(Integer, nullable=False)
+    attempt_number = Column(Integer, default=1)
+    status = Column(String, default="PENDING")  # see STEP_RUN_STATUSES
+    outcome = Column(Text, nullable=True)
+    failure_category = Column(String, nullable=True)  # see FAILURE_CATEGORIES
+    machine_message = Column(Text, nullable=True)
+    locator_used_json = Column(Text, nullable=True)
+    started_at = Column(DateTime, nullable=True)
+    ended_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class RunnerExecutionEvent(ProjectBase):
+    """Append-only raw event stream for a WorkflowRun. Idempotent
+    delivery: (workflow_run_id, idempotency_key) is unique whenever the
+    runner supplies a key, so a retried POST (e.g. after a network blip)
+    returns the original row instead of creating a duplicate. Events
+    without a key (e.g. HEARTBEAT) aren't dedup-sensitive and skip this."""
+
+    __tablename__ = "runner_execution_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    workflow_run_id = Column(Integer, ForeignKey("workflow_runs.id"), nullable=False)
+    event_type = Column(String, nullable=False)  # see RUNNER_EXEC_EVENT_TYPES
+    actor_type = Column(String, default="RUNNER")  # see RESULT_SOURCES (HUMAN|RUNNER|SYSTEM)
+    idempotency_key = Column(String, nullable=True)
+    payload_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("workflow_run_id", "idempotency_key", name="uq_run_event_idempotency"),
     )

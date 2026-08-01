@@ -6,6 +6,7 @@
   "description": "HYB-0 spike: minimal QA Runner (Node.js + Playwright) proving hybrid manual+automation execution against QA-Again's FastAPI control plane.",
   "scripts": {
     "spike": "tsx src/main.ts",
+    "execute": "tsx src/executeMain.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

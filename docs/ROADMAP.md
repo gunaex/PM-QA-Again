@@ -304,7 +304,7 @@ proceed on a dedicated `feature/hybrid-mvp` branch while Release Closure
 remains open. Production readiness is **not** claimed regardless of how
 much HYB work completes; see Track B below for HYB-1's actual status.
 
-## Track B — Hybrid manual+automation expansion (HYB-0 + HYB-1 complete; HYB-2–HYB-5 pending)
+## Track B — Hybrid manual+automation expansion (HYB-0–HYB-2 complete; HYB-3–HYB-5 pending)
 
 Full detail lives in `QA_AGAIN_HYBRID_AI_QA_MVP_EXPANSION.md`; this is
 the index. QA-Again gains a separate **QA Runner** (Node.js + Playwright,
@@ -405,9 +405,75 @@ Delivery sequence after the spike:
   process-global, IP-keyed limiter and never reset it, silently breaking
   any test file that ran afterward and needed a real login within the
   same test process — fixed with `limiter.reset()`.
-- **HYB-2** — runner registration and execution (registration/revocation,
-  heartbeat, job claim protocol, execution state machine, Chromium
-  execution, structured step results, failure categories).
+- **HYB-2** — runner registration and execution. **Done, 2026-08-02** —
+  branch `feature/hybrid-mvp`. `RunnerToken` (master DB) extended with
+  registration/heartbeat fields (name/version/platform/capabilities/
+  `last_heartbeat_at`) rather than a second `runners` table — one runner
+  process still equals one token in this MVP. New project-scoped
+  `WorkflowRun`/`WorkflowStepRun`/`RunnerExecutionEvent` tables and a
+  real job-claim protocol (`backend/app/routers/workflow_runs.py`):
+  outbound-only `/claim` (atomic, SQLite-serialized — a second runner
+  racing for the same job gets nothing), a time-limited lease
+  (`lease_token`/`lease_expires_at`) renewed via `/heartbeat`, a lazy
+  expiry sweep (`_expire_stale_leases`, no cron needed) that marks a
+  run `RUNNER_LOST` if its lease lapses, idempotent event delivery
+  (`(workflow_run_id, idempotency_key)` unique — a retried POST returns
+  the original row), structured `WorkflowStepRun` history distinct from
+  the raw event log, and cooperative cancellation (`cancel_requested`
+  flag; a `QUEUED` run cancels immediately, a claimed one waits for the
+  runner to observe the flag and self-terminate). Evidence upload
+  reuses the real `EvidenceItem`/`EvidenceStorage` system exactly as
+  decided in `HYB-1-GAP-ANALYSIS-REFRESH.md` — not a parallel table —
+  gated on the run being linked to a `cycle_test_result_id` (a
+  standalone run with no cycle link cannot upload evidence through this
+  endpoint; documented gap, not silently allowed). `runner/` gained a
+  second real entry point (`npm run execute`, alongside the untouched
+  HYB-0 `npm run spike`): `executionClient.ts` (job protocol client),
+  `execution/locators.ts` (structured-locator resolution — `TEST_ID`/
+  `ROLE`/`LABEL`/`PLACEHOLDER`/`TEXT`/`CSS`/`XPATH`, never raw x/y — and
+  `${VAR_NAME}` sensitive-value resolution against the runner's own
+  environment, never logged), `execution/executor.ts` (claims, executes
+  a published revision's steps against one persistent Playwright page,
+  auto-retrying `ASSERT_TEXT`/`ASSERT_URL` within the step timeout
+  rather than checking once, heuristically categorizing failures into
+  `FAILURE_CATEGORIES`, pausing cleanly — not faking a resume — at a
+  `MANUAL_CHECKPOINT` since checkpoint resume is HYB-4 scope). Frontend:
+  `RunnerList.jsx` (register/list/revoke, live ONLINE/STALE/OFFLINE/
+  REVOKED status, admin-only) and a "Runs" panel in `WorkflowDetail.jsx`
+  (queue, live-polling status, expandable step-run + event history,
+  cancel).
+
+  **Two real bugs found and fixed via the actual real-runner run, not
+  code review**: (1) the runner's own cancel-check poll (`GET
+  /workflow-runs/{id}`) 401'd because that endpoint required a user
+  session — the runner only ever holds a token. Fixed with
+  `_require_user_or_runner`, the same dual-credential pattern HYB-0's
+  `hybrid.py::get_run` already established. (2) `ASSERT_TEXT`/
+  `ASSERT_URL` checked the page exactly once immediately after a
+  preceding `CLICK`, before the SPA had finished navigating — a false
+  failure, not a real one. Fixed with `pollUntil()`, auto-retrying
+  within the step's timeout the same way Playwright's own `expect()`
+  assertions do.
+
+  Verified: 7 new backend pytest tests (full job protocol including
+  duplicate-claim rejection, wrong-lease rejection, idempotent event
+  replay, lease-expiry → `RUNNER_LOST`, cooperative vs. immediate
+  cancel, evidence-requires-cycle-link, and distinct HUMAN/RUNNER/
+  SYSTEM provenance) — full suite **52/52** (45 + 7). Frontend build
+  clean. Runner `tsc --noEmit` clean. **Real end-to-end run, not
+  mocked**: a real Node.js/TypeScript process launched real headed
+  Chromium, claimed a queued run over HTTP, logged into QA-Again's own
+  real `/login` page for real (NAVIGATE → FILL email → FILL a sensitive
+  `${RUNNER_LOGIN_PASSWORD}` placeholder → CLICK → ASSERT_TEXT →
+  SCREENSHOT), and PASSED — confirmed via the API (structured
+  `WorkflowStepRun` rows, a real 21,677-byte PNG `EvidenceItem` with
+  `evidence_source=RUNNER`, `workflow_run_id` set, visible through
+  Track A's own evidence-list endpoint) and via a real headed-browser
+  Playwright pass through the actual `RunnerList`/`WorkflowDetail` UI
+  (screenshot: runner ONLINE with a live heartbeat; all three attempted
+  runs — `RUNNER_LOST`, `FAILED`, `PASSED` — listed with correct status,
+  step-by-step results, and provenance-tagged event history). See
+  `docs/hybrid/SESSION_HANDOFF.md` for the full verification record.
 - **HYB-3** — recorder (record session, semantic locator capture,
   sensitive-input handling, draft workflow generation, locator warnings,
   tester review before publish).

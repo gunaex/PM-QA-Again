@@ -10,6 +10,7 @@ import CycleExecution from './pages/CycleExecution.jsx'
 import ReportsPage from './pages/ReportsPage.jsx'
 import WorkflowList from './pages/WorkflowList.jsx'
 import WorkflowDetail from './pages/WorkflowDetail.jsx'
+import RunnerList from './pages/RunnerList.jsx'
 import LoginPage from './pages/LoginPage.jsx'
 import RequireAuth from './auth/RequireAuth.jsx'
 
@@ -22,6 +23,14 @@ function App() {
         element={
           <RequireAuth>
             <ProjectList />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/runners"
+        element={
+          <RequireAuth>
+            <RunnerList />
           </RequireAuth>
         }
       />

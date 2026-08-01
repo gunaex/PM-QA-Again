@@ -37,8 +37,24 @@ MASTER_COLUMN_PATCHES: dict[str, dict[str, str]] = {
         "storage_quota_bytes": "INTEGER DEFAULT 5368709120",
         "storage_warning_thresholds": "TEXT DEFAULT '[70, 85, 95, 100]'",
     },
+    # HYB-2: registration/heartbeat fields on an existing runner_tokens row.
+    "runner_tokens": {
+        "runner_name": "TEXT",
+        "runner_version": "TEXT",
+        "os_metadata": "TEXT",
+        "browser_version": "TEXT",
+        "capabilities_json": "TEXT",
+        "last_heartbeat_at": "DATETIME",
+    },
 }
-PROJECT_COLUMN_PATCHES: dict[str, dict[str, str]] = {}
+PROJECT_COLUMN_PATCHES: dict[str, dict[str, str]] = {
+    # HYB-2: optional hybrid-evidence links on the existing evidence_items
+    # table (docs/hybrid/HYB-1-GAP-ANALYSIS-REFRESH.md decision 2).
+    "evidence_items": {
+        "workflow_run_id": "INTEGER",
+        "workflow_step_run_id": "INTEGER",
+    },
+}
 
 # Additive index patches (docs/PERFORMANCE_FAST_PASS.md) — `CREATE INDEX
 # IF NOT EXISTS` is safe against both a fresh database (created via
@@ -62,7 +78,7 @@ PROJECT_COLUMN_PATCHES: dict[str, dict[str, str]] = {}
 PROJECT_INDEXES: dict[str, list[str]] = {
     "cycle_test_results": ["cycle_id", "test_case_id"],
     "cycle_result_history": ["cycle_test_result_id"],
-    "evidence_items": ["cycle_test_result_id", "cycle_id"],
+    "evidence_items": ["cycle_test_result_id", "cycle_id", "workflow_run_id"],
     "evidence_revisions": ["evidence_id"],
     "test_cases": ["revision_id", "suite_id"],
     "script_revisions": ["suite_id"],
@@ -76,6 +92,10 @@ PROJECT_INDEXES: dict[str, list[str]] = {
     "workflow_revisions": ["workflow_id"],
     "workflow_steps": ["revision_id"],
     "workflow_test_case_links": ["workflow_revision_id", "test_case_id"],
+    # HYB-2: run-list/claim/step-history/event lookups.
+    "workflow_runs": ["workflow_revision_id", "status", "cycle_test_result_id"],
+    "workflow_step_runs": ["workflow_run_id"],
+    "runner_execution_events": ["workflow_run_id"],
 }
 
 

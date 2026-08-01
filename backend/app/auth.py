@@ -231,4 +231,20 @@ def get_current_runner(request: Request, db: Session = Depends(get_master_db)) -
     )
     if not record:
         raise HTTPException(status_code=401, detail="Invalid or revoked runner token")
+    # HYB-2: every authenticated runner call counts as a liveness signal
+    # — no separate heartbeat call is required just to stay ONLINE,
+    # though the runner still sends explicit heartbeats while idle
+    # between jobs (see runner/src/execution/*).
+    record.last_heartbeat_at = datetime.utcnow()
+    db.commit()
+    return record
+
+
+def revoke_runner_token(db: Session, token_id: int) -> models.RunnerToken:
+    record = db.query(models.RunnerToken).filter(models.RunnerToken.id == token_id).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="Runner token not found")
+    record.revoked = True
+    db.commit()
+    db.refresh(record)
     return record

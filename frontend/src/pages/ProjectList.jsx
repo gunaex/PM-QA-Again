@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, NavLink } from 'react-router-dom'
 import { listProjects, createProject, archiveProject, deleteProject } from '../api/client'
 import UserBadge from '../components/UserBadge.jsx'
 import PasswordConfirmModal from '../components/PasswordConfirmModal.jsx'
@@ -67,6 +67,11 @@ export default function ProjectList() {
                 <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
                 Show archived
               </label>
+            )}
+            {isAdmin && (
+              <NavLink to="/runners" className="text-sm text-gray-500 hover:text-gray-800">
+                Runners
+              </NavLink>
             )}
             <UserBadge />
           </div>

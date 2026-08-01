@@ -219,4 +219,18 @@ export const createWorkflowLink = (slug, workflowId, revisionId, testCaseId) =>
 export const deleteWorkflowLink = (slug, workflowId, revisionId, linkId) =>
   api.delete(`/${slug}/workflows/${workflowId}/revisions/${revisionId}/links/${linkId}`).then((r) => r.data)
 
+// Workflow runs (HYB-2)
+export const listWorkflowRuns = (slug) => api.get(`/${slug}/workflow-runs`).then((r) => r.data)
+export const queueWorkflowRun = (slug, workflowRevisionId, cycleTestResultId = null) =>
+  api
+    .post(`/${slug}/workflow-runs`, { workflow_revision_id: workflowRevisionId, cycle_test_result_id: cycleTestResultId })
+    .then((r) => r.data)
+export const getWorkflowRun = (slug, runId) => api.get(`/${slug}/workflow-runs/${runId}`).then((r) => r.data)
+export const cancelWorkflowRun = (slug, runId) => api.post(`/${slug}/workflow-runs/${runId}/cancel`).then((r) => r.data)
+
+// Runner tokens (HYB-2)
+export const listRunnerTokens = () => api.get('/runner-tokens').then((r) => r.data)
+export const createRunnerToken = (label) => api.post('/runner-tokens', { label }).then((r) => r.data)
+export const revokeRunnerToken = (tokenId) => api.put(`/runner-tokens/${tokenId}/revoke`).then((r) => r.data)
+
 export default api

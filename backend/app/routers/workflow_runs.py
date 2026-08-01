@@ -1,0 +1,531 @@
+"""HYB-2: runner job-claim protocol and structured execution history.
+
+Job protocol (docs/Autonomous hybird prompt.md's HYB-2 section):
+  1. A human/system queues a run against a PUBLISHED workflow revision.
+  2. A runner authenticates (X-Runner-Token) and POSTs /claim -- this is
+     the runner initiating outbound, never the backend calling into the
+     runner (see docs/hybrid/HYB-0-GAP-ANALYSIS.md's outbound-only rule,
+     which still applies unchanged).
+  3. The claim grants a time-limited lease (lease_token + expiry). Every
+     subsequent runner call for that run must present the same
+     lease_token, both to prove ownership and to make a second runner
+     racing for the same "already claimed" run get rejected outright.
+  4. The runner renews the lease via /heartbeat while working; if it
+     stops (crash, network loss), the lease silently expires and a lazy
+     sweep (`_expire_stale_leases`, invoked at the top of every endpoint
+     here) marks the run RUNNER_LOST -- no cron/scheduler needed.
+  5. Structured step results land in WorkflowStepRun rows (not just the
+     raw RunnerExecutionEvent log), and events support an idempotency
+     key so a retried POST after a network blip is a no-op, not a
+     duplicate.
+"""
+import hashlib
+import logging
+import uuid
+from datetime import datetime, timedelta
+
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
+from sqlalchemy.orm import Session
+
+from .. import models, schemas
+from ..database import get_project_db, get_master_db
+from ..evidence_utils import sniff_image, MAX_EVIDENCE_SIZE_BYTES
+from ..auth import get_current_user, require_tester, get_current_runner, _hash_token
+from ..quota import quota_status
+from ..storage import EvidenceStorage, get_evidence_storage
+
+logger = logging.getLogger("workflow_runs")
+
+router = APIRouter(prefix="/api/{slug}/workflow-runs", tags=["workflow-runs"])
+
+
+# ---------- shared helpers ----------
+
+
+def _expire_stale_leases(db: Session):
+    now = datetime.utcnow()
+    stale = (
+        db.query(models.WorkflowRun)
+        .filter(
+            models.WorkflowRun.status.in_(models.WORKFLOW_RUN_LEASED_STATUSES),
+            models.WorkflowRun.lease_expires_at.isnot(None),
+            models.WorkflowRun.lease_expires_at < now,
+        )
+        .all()
+    )
+    for run in stale:
+        run.status = "RUNNER_LOST"
+        run.ended_at = now
+        _add_event(db, run.id, "RUNNER_LOST", "SYSTEM")
+    if stale:
+        db.commit()
+
+
+def _add_event(db: Session, run_id: int, event_type: str, actor_type: str, idempotency_key: str | None = None, payload_json: str | None = None):
+    if event_type not in models.RUNNER_EXEC_EVENT_TYPES:
+        raise HTTPException(status_code=400, detail=f"event_type must be one of {models.RUNNER_EXEC_EVENT_TYPES}")
+    db.add(
+        models.RunnerExecutionEvent(
+            workflow_run_id=run_id, event_type=event_type, actor_type=actor_type,
+            idempotency_key=idempotency_key, payload_json=payload_json,
+        )
+    )
+
+
+def _require_user_or_runner(request: Request, master_db: Session):
+    """The runner polls GET /{run_id} to check cancel_requested between
+    steps -- it only holds a runner token, never a user cookie/JWT. This
+    endpoint is also used by the human-facing run monitoring UI. No
+    single FastAPI dependency covers both credential types, so (matching
+    hybrid.py's get_run) this checks manually instead."""
+    if request.headers.get("X-Runner-Token"):
+        raw_token = request.headers["X-Runner-Token"]
+        record = (
+            master_db.query(models.RunnerToken)
+            .filter(models.RunnerToken.token_hash == _hash_token(raw_token), models.RunnerToken.revoked == False)  # noqa: E712
+            .first()
+        )
+        if not record:
+            raise HTTPException(status_code=401, detail="Invalid or revoked runner token")
+        record.last_heartbeat_at = datetime.utcnow()
+        master_db.commit()
+        return
+    # Fall through to normal cookie/JWT user auth.
+    get_current_user(request=request, db=master_db)
+
+
+def _get_run(db: Session, run_id: int) -> models.WorkflowRun:
+    run = db.query(models.WorkflowRun).filter(models.WorkflowRun.id == run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Workflow run not found")
+    return run
+
+
+def _require_lease(run: models.WorkflowRun, runner: models.RunnerToken, lease_token: str):
+    if run.runner_id != runner.id or not run.lease_token or run.lease_token != lease_token:
+        raise HTTPException(status_code=409, detail="This run is not currently leased to you (claimed by another runner, expired, or already finished)")
+
+
+def _to_run_out(db: Session, run: models.WorkflowRun) -> schemas.WorkflowRunOut:
+    out = schemas.WorkflowRunOut.model_validate(run)
+    revision = db.query(models.WorkflowRevision).filter(models.WorkflowRevision.id == run.workflow_revision_id).first()
+    if revision:
+        out.workflow_revision_label = revision.revision_label
+        wf = db.query(models.WorkflowDefinition).filter(models.WorkflowDefinition.id == revision.workflow_id).first()
+        if wf:
+            out.workflow_name = wf.name
+    return out
+
+
+# ---------- queue / list / detail (human + runner reads) ----------
+
+
+@router.post("", response_model=schemas.WorkflowRunOut)
+def queue_run(
+    slug: str,
+    payload: schemas.WorkflowRunCreate,
+    db: Session = Depends(get_project_db),
+    user: models.User = Depends(require_tester),
+):
+    revision = db.query(models.WorkflowRevision).filter(models.WorkflowRevision.id == payload.workflow_revision_id).first()
+    if not revision:
+        raise HTTPException(status_code=404, detail="Workflow revision not found")
+    if revision.status != "PUBLISHED":
+        raise HTTPException(status_code=400, detail=f"Only a PUBLISHED workflow revision can be run (current status: {revision.status})")
+    if payload.cycle_test_result_id is not None:
+        result = db.query(models.CycleTestResult).filter(models.CycleTestResult.id == payload.cycle_test_result_id).first()
+        if not result:
+            raise HTTPException(status_code=404, detail="cycle_test_result_id does not exist")
+
+    run = models.WorkflowRun(
+        workflow_revision_id=revision.id,
+        cycle_test_result_id=payload.cycle_test_result_id,
+        status="QUEUED",
+        queued_by=user.email,
+    )
+    db.add(run)
+    db.flush()
+    _add_event(db, run.id, "RUN_QUEUED", "HUMAN")
+    db.commit()
+    db.refresh(run)
+    return _to_run_out(db, run)
+
+
+@router.get("", response_model=list[schemas.WorkflowRunOut], dependencies=[Depends(get_current_user)])
+def list_runs(slug: str, db: Session = Depends(get_project_db)):
+    _expire_stale_leases(db)
+    runs = db.query(models.WorkflowRun).order_by(models.WorkflowRun.created_at.desc()).all()
+    return [_to_run_out(db, r) for r in runs]
+
+
+@router.get("/{run_id}", response_model=schemas.WorkflowRunDetailOut)
+def get_run(slug: str, run_id: int, request: Request, db: Session = Depends(get_project_db), master_db: Session = Depends(get_master_db)):
+    _require_user_or_runner(request, master_db)
+    _expire_stale_leases(db)
+    run = _get_run(db, run_id)
+    step_runs = (
+        db.query(models.WorkflowStepRun)
+        .filter(models.WorkflowStepRun.workflow_run_id == run_id)
+        .order_by(models.WorkflowStepRun.sequence_no, models.WorkflowStepRun.id)
+        .all()
+    )
+    step_by_id = {
+        s.id: s for s in db.query(models.WorkflowStep).filter(models.WorkflowStep.id.in_([sr.workflow_step_id for sr in step_runs])).all()
+    }
+    step_run_outs = []
+    for sr in step_runs:
+        item = schemas.WorkflowStepRunOut.model_validate(sr)
+        step = step_by_id.get(sr.workflow_step_id)
+        if step:
+            item.step_type = step.step_type
+            item.step_description = step.description
+        step_run_outs.append(item)
+
+    events = (
+        db.query(models.RunnerExecutionEvent)
+        .filter(models.RunnerExecutionEvent.workflow_run_id == run_id)
+        .order_by(models.RunnerExecutionEvent.id)
+        .all()
+    )
+
+    out = schemas.WorkflowRunDetailOut.model_validate(_to_run_out(db, run))
+    out.step_runs = step_run_outs
+    out.events = events
+    return out
+
+
+@router.post("/{run_id}/cancel", response_model=schemas.WorkflowRunOut, dependencies=[Depends(get_current_user)])
+def cancel_run(slug: str, run_id: int, db: Session = Depends(get_project_db), user: models.User = Depends(require_tester)):
+    _expire_stale_leases(db)
+    run = _get_run(db, run_id)
+    if run.status in models.WORKFLOW_RUN_TERMINAL_STATUSES:
+        raise HTTPException(status_code=400, detail=f"Run already ended (status: {run.status})")
+    if run.status == "QUEUED":
+        # Never claimed -- no runner to cooperate with, cancel outright.
+        run.status = "CANCELLED"
+        run.ended_at = datetime.utcnow()
+        _add_event(db, run.id, "RUN_CANCELLED", "HUMAN", payload_json=f'{{"cancelled_by":"{user.email}"}}')
+    else:
+        # Claimed/running/waiting -- ask the runner to stop cooperatively;
+        # it observes cancel_requested and calls /complete itself. See
+        # runner/src/execution/executor.ts's per-step cancel check.
+        run.cancel_requested = True
+    db.commit()
+    db.refresh(run)
+    return _to_run_out(db, run)
+
+
+# ---------- runner job-claim protocol ----------
+
+
+@router.post("/claim")
+def claim_run(
+    slug: str,
+    db: Session = Depends(get_project_db),
+    runner: models.RunnerToken = Depends(get_current_runner),
+):
+    _expire_stale_leases(db)
+    run = (
+        db.query(models.WorkflowRun)
+        .filter(models.WorkflowRun.status == "QUEUED")
+        .order_by(models.WorkflowRun.created_at.asc())
+        .first()
+    )
+    if not run:
+        return {"claimed": False}
+
+    lease_token = uuid.uuid4().hex
+    run.status = "CLAIMED"
+    run.runner_id = runner.id
+    run.lease_token = lease_token
+    run.lease_expires_at = datetime.utcnow() + timedelta(seconds=models.LEASE_DURATION_SECONDS)
+    if not run.started_at:
+        run.started_at = datetime.utcnow()
+    _add_event(db, run.id, "RUN_CLAIMED", "RUNNER")
+    db.commit()
+    db.refresh(run)
+
+    steps = (
+        db.query(models.WorkflowStep)
+        .filter(models.WorkflowStep.revision_id == run.workflow_revision_id, models.WorkflowStep.enabled.is_(True))
+        .order_by(models.WorkflowStep.sequence_no)
+        .all()
+    )
+
+    target_base_url = None
+    if run.cycle_test_result_id:
+        result = db.query(models.CycleTestResult).filter(models.CycleTestResult.id == run.cycle_test_result_id).first()
+        if result:
+            cycle = db.query(models.TestCycle).filter(models.TestCycle.id == result.cycle_id).first()
+            if cycle:
+                target_base_url = cycle.target_base_url
+
+    return {
+        "claimed": True,
+        "run": schemas.WorkflowRunOut.model_validate(_to_run_out(db, run)).model_dump(mode="json"),
+        "steps": [schemas.WorkflowRunClaimStep.model_validate(s).model_dump(mode="json") for s in steps],
+        "lease_token": lease_token,
+        "target_base_url": target_base_url,
+    }
+
+
+@router.post("/{run_id}/heartbeat", response_model=schemas.WorkflowRunOut)
+def heartbeat(
+    slug: str,
+    run_id: int,
+    payload: schemas.RunnerHeartbeatRequest,
+    db: Session = Depends(get_project_db),
+    runner: models.RunnerToken = Depends(get_current_runner),
+):
+    _expire_stale_leases(db)
+    run = _get_run(db, run_id)
+    if run.status in models.WORKFLOW_RUN_LEASED_STATUSES:
+        _require_lease(run, runner, payload.lease_token or "")
+        run.lease_expires_at = datetime.utcnow() + timedelta(seconds=models.LEASE_DURATION_SECONDS)
+        _add_event(db, run.id, "HEARTBEAT", "RUNNER")
+        db.commit()
+        db.refresh(run)
+    return _to_run_out(db, run)
+
+
+@router.post("/{run_id}/events", response_model=schemas.RunnerExecutionEventOut)
+def post_event(
+    slug: str,
+    run_id: int,
+    payload: schemas.RunnerEventCreate,
+    db: Session = Depends(get_project_db),
+    runner: models.RunnerToken = Depends(get_current_runner),
+):
+    _expire_stale_leases(db)
+    run = _get_run(db, run_id)
+    _require_lease(run, runner, payload.lease_token)
+
+    if payload.idempotency_key:
+        existing = (
+            db.query(models.RunnerExecutionEvent)
+            .filter(
+                models.RunnerExecutionEvent.workflow_run_id == run_id,
+                models.RunnerExecutionEvent.idempotency_key == payload.idempotency_key,
+            )
+            .first()
+        )
+        if existing:
+            return existing  # idempotent replay -- not a new row
+
+    if payload.event_type == "CHECKPOINT_WAITING":
+        run.status = "WAITING_FOR_HUMAN"
+        run.lease_expires_at = None  # not actively lease-tracked while waiting on a human
+
+    _add_event(db, run_id, payload.event_type, payload.actor_type, payload.idempotency_key, payload.payload_json)
+    db.commit()
+
+    event = (
+        db.query(models.RunnerExecutionEvent)
+        .filter(models.RunnerExecutionEvent.workflow_run_id == run_id)
+        .order_by(models.RunnerExecutionEvent.id.desc())
+        .first()
+    )
+    return event
+
+
+@router.post("/{run_id}/step-runs", response_model=schemas.WorkflowStepRunOut)
+def start_step_run(
+    slug: str,
+    run_id: int,
+    payload: schemas.StepRunStartRequest,
+    db: Session = Depends(get_project_db),
+    runner: models.RunnerToken = Depends(get_current_runner),
+):
+    _expire_stale_leases(db)
+    run = _get_run(db, run_id)
+    _require_lease(run, runner, payload.lease_token)
+
+    step = db.query(models.WorkflowStep).filter(models.WorkflowStep.id == payload.workflow_step_id, models.WorkflowStep.revision_id == run.workflow_revision_id).first()
+    if not step:
+        raise HTTPException(status_code=404, detail="Workflow step not found on this run's revision")
+
+    if run.status == "CLAIMED":
+        run.status = "STARTING"
+    if run.status in ("STARTING",):
+        run.status = "RUNNING"
+
+    step_run = models.WorkflowStepRun(
+        workflow_run_id=run_id, workflow_step_id=step.id, sequence_no=step.sequence_no,
+        attempt_number=payload.attempt_number, status="RUNNING", started_at=datetime.utcnow(),
+    )
+    db.add(step_run)
+    _add_event(db, run_id, "STEP_STARTED", "RUNNER", payload_json=f'{{"workflow_step_id":{step.id},"sequence_no":{step.sequence_no}}}')
+    db.commit()
+    db.refresh(step_run)
+    out = schemas.WorkflowStepRunOut.model_validate(step_run)
+    out.step_type = step.step_type
+    out.step_description = step.description
+    return out
+
+
+@router.put("/{run_id}/step-runs/{step_run_id}", response_model=schemas.WorkflowStepRunOut)
+def finish_step_run(
+    slug: str,
+    run_id: int,
+    step_run_id: int,
+    payload: schemas.StepRunFinishRequest,
+    db: Session = Depends(get_project_db),
+    runner: models.RunnerToken = Depends(get_current_runner),
+):
+    _expire_stale_leases(db)
+    run = _get_run(db, run_id)
+    _require_lease(run, runner, payload.lease_token)
+
+    step_run = db.query(models.WorkflowStepRun).filter(models.WorkflowStepRun.id == step_run_id, models.WorkflowStepRun.workflow_run_id == run_id).first()
+    if not step_run:
+        raise HTTPException(status_code=404, detail="Step run not found")
+    if payload.status not in models.STEP_RUN_STATUSES:
+        raise HTTPException(status_code=400, detail=f"status must be one of {models.STEP_RUN_STATUSES}")
+    if payload.failure_category and payload.failure_category not in models.FAILURE_CATEGORIES:
+        raise HTTPException(status_code=400, detail=f"failure_category must be one of {models.FAILURE_CATEGORIES}")
+
+    step_run.status = payload.status
+    step_run.outcome = payload.outcome
+    step_run.failure_category = payload.failure_category
+    step_run.machine_message = payload.machine_message
+    step_run.locator_used_json = payload.locator_used_json
+    step_run.ended_at = datetime.utcnow()
+
+    event_type = "STEP_FAILED" if payload.status == "FAILED" else "STEP_COMPLETED"
+    _add_event(db, run_id, event_type, "RUNNER", payload_json=f'{{"step_run_id":{step_run.id},"status":"{payload.status}"}}')
+    db.commit()
+    db.refresh(step_run)
+
+    step = db.query(models.WorkflowStep).filter(models.WorkflowStep.id == step_run.workflow_step_id).first()
+    out = schemas.WorkflowStepRunOut.model_validate(step_run)
+    if step:
+        out.step_type = step.step_type
+        out.step_description = step.description
+    return out
+
+
+@router.post("/{run_id}/complete", response_model=schemas.WorkflowRunOut)
+def complete_run(
+    slug: str,
+    run_id: int,
+    payload: schemas.WorkflowRunCompleteRequest,
+    db: Session = Depends(get_project_db),
+    runner: models.RunnerToken = Depends(get_current_runner),
+):
+    _expire_stale_leases(db)
+    run = _get_run(db, run_id)
+    _require_lease(run, runner, payload.lease_token)
+
+    allowed_terminal = {"PASSED", "FAILED", "BLOCKED", "SYSTEM_ERROR", "CANCELLED"}
+    if payload.status not in allowed_terminal:
+        raise HTTPException(status_code=400, detail=f"status must be one of {sorted(allowed_terminal)}")
+
+    run.status = payload.status
+    run.ended_at = datetime.utcnow()
+    run.result_summary = payload.result_summary
+    run.lease_token = None
+    run.lease_expires_at = None
+    _add_event(db, run_id, "RUN_COMPLETED", "RUNNER", payload_json=f'{{"status":"{payload.status}"}}')
+    db.commit()
+    db.refresh(run)
+    return _to_run_out(db, run)
+
+
+# ---------- evidence (reuses the real EvidenceStorage abstraction) ----------
+
+
+@router.post("/{run_id}/evidence", response_model=schemas.EvidenceItemOut)
+async def upload_run_evidence(
+    slug: str,
+    run_id: int,
+    lease_token: str,
+    step_run_id: int | None = None,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_project_db),
+    master_db: Session = Depends(get_master_db),
+    storage: EvidenceStorage = Depends(get_evidence_storage),
+    runner: models.RunnerToken = Depends(get_current_runner),
+):
+    """Deliberately requires cycle_test_result_id -- preserves
+    EvidenceItem's existing NOT NULL cycle_id/cycle_test_result_id
+    invariant unchanged rather than weakening it for standalone runs.
+    A run not linked to a cycle result cannot upload evidence through
+    this endpoint (documented gap, see docs/hybrid/
+    HYB-1-GAP-ANALYSIS-REFRESH.md decision 2)."""
+    _expire_stale_leases(db)
+    run = _get_run(db, run_id)
+    _require_lease(run, runner, lease_token)
+    if not run.cycle_test_result_id:
+        raise HTTPException(
+            status_code=400,
+            detail="This run has no cycle_test_result_id — screenshot evidence requires the run to be linked to a Track A cycle result.",
+        )
+    result = db.query(models.CycleTestResult).filter(models.CycleTestResult.id == run.cycle_test_result_id).first()
+    if not result:
+        raise HTTPException(status_code=404, detail="Linked cycle result no longer exists")
+    cycle = db.query(models.TestCycle).filter(models.TestCycle.id == result.cycle_id).first()
+    if cycle and cycle.status == "LOCKED":
+        raise HTTPException(status_code=400, detail="Cycle is LOCKED — evidence cannot be added. An admin must /reopen it first.")
+
+    content = await file.read()
+    if len(content) > MAX_EVIDENCE_SIZE_BYTES:
+        raise HTTPException(status_code=400, detail=f"Evidence file exceeds the {MAX_EVIDENCE_SIZE_BYTES // (1024*1024)}MB limit")
+    sniffed = sniff_image(content)
+    if not sniffed:
+        raise HTTPException(status_code=400, detail="File is not a recognized image (PNG/JPEG/GIF/WEBP signature check failed)")
+    content_type, ext = sniffed
+    sha256 = hashlib.sha256(content).hexdigest()
+
+    project = master_db.query(models.Project).filter(models.Project.slug == slug).first()
+    status_before = quota_status(project, db)
+    if status_before["used_bytes"] + len(content) > status_before["quota_bytes"]:
+        raise HTTPException(status_code=400, detail="Uploading this file would exceed the project's storage quota")
+
+    existing = (
+        db.query(models.EvidenceItem)
+        .filter(
+            models.EvidenceItem.cycle_test_result_id == result.id,
+            models.EvidenceItem.original_sha256 == sha256,
+            models.EvidenceItem.status == "ACTIVE",
+        )
+        .first()
+    )
+    if existing:
+        return existing
+
+    object_key = f"evidence/{slug}/{result.id}/{uuid.uuid4().hex}.{ext}"
+    try:
+        storage.put(object_key, content, content_type)
+    except Exception as exc:
+        logger.error("Runner evidence storage write failed for key %s: %s", object_key, exc)
+        raise HTTPException(status_code=502, detail="Could not store the evidence file — nothing was saved, safe to retry") from exc
+
+    item = models.EvidenceItem(
+        cycle_id=result.cycle_id,
+        cycle_test_result_id=result.id,
+        evidence_type="SCREENSHOT",
+        object_key=object_key,
+        original_filename=file.filename or "runner-screenshot.png",
+        original_content_type=content_type,
+        original_size_bytes=len(content),
+        original_sha256=sha256,
+        captured_by=f"runner:{runner.label}",
+        evidence_source="RUNNER",
+        workflow_run_id=run.id,
+        workflow_step_run_id=step_run_id,
+    )
+    try:
+        db.add(item)
+        db.commit()
+        db.refresh(item)
+    except Exception as exc:
+        db.rollback()
+        try:
+            storage.delete(object_key)
+        except Exception as cleanup_exc:
+            logger.error("ORPHANED EVIDENCE OBJECT (runner upload, failed DB insert, cleanup also failed): %s / %s", object_key, cleanup_exc)
+        raise HTTPException(status_code=500, detail="The evidence file could not be recorded — retry the upload.") from exc
+
+    _add_event(db, run_id, "STEP_COMPLETED", "RUNNER", payload_json=f'{{"evidence_id":{item.id},"kind":"screenshot"}}')
+    db.commit()
+    return item

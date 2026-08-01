@@ -207,6 +207,29 @@ class RunnerTokenOut(BaseModel):
     token: str  # raw token — returned once, at creation, never again
 
 
+class RunnerRegistrationOut(BaseModel):
+    """HYB-2: the admin-facing runner list — never includes the raw
+    token or its hash, only registration/heartbeat metadata."""
+
+    id: int
+    label: str
+    revoked: bool
+    runner_name: Optional[str] = None
+    runner_version: Optional[str] = None
+    os_metadata: Optional[str] = None
+    browser_version: Optional[str] = None
+    capabilities_json: Optional[str] = None
+    last_heartbeat_at: Optional[datetime] = None
+    created_at: datetime
+    # Computed, not stored: ONLINE (heartbeat within the lease window),
+    # STALE (heartbeat exists but is old), OFFLINE (never heartbeated),
+    # REVOKED.
+    status: str = "OFFLINE"
+
+    class Config:
+        from_attributes = True
+
+
 class HybridRunCreate(BaseModel):
     label: Optional[str] = None
 
@@ -440,6 +463,8 @@ class EvidenceItemOut(BaseModel):
     status: str
     evidence_source: str
     created_at: datetime
+    workflow_run_id: Optional[int] = None
+    workflow_step_run_id: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -668,3 +693,135 @@ class WorkflowTestCaseLinkOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# ---------- HYB-2: runner registration and execution ----------
+
+
+class WorkflowRunCreate(BaseModel):
+    workflow_revision_id: int
+    cycle_test_result_id: Optional[int] = None
+
+
+class WorkflowRunOut(BaseModel):
+    id: int
+    workflow_revision_id: int
+    cycle_test_result_id: Optional[int] = None
+    status: str
+    runner_id: Optional[int] = None
+    lease_expires_at: Optional[datetime] = None
+    cancel_requested: bool
+    queued_by: Optional[str] = None
+    started_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+    result_summary: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    # Flattened for the run list.
+    workflow_name: Optional[str] = None
+    workflow_revision_label: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class WorkflowStepRunOut(BaseModel):
+    id: int
+    workflow_run_id: int
+    workflow_step_id: int
+    sequence_no: int
+    attempt_number: int
+    status: str
+    outcome: Optional[str] = None
+    failure_category: Optional[str] = None
+    machine_message: Optional[str] = None
+    locator_used_json: Optional[str] = None
+    started_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+    created_at: datetime
+    # Flattened.
+    step_type: Optional[str] = None
+    step_description: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class RunnerExecutionEventOut(BaseModel):
+    id: int
+    workflow_run_id: int
+    event_type: str
+    actor_type: str
+    idempotency_key: Optional[str] = None
+    payload_json: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class WorkflowRunDetailOut(WorkflowRunOut):
+    step_runs: list[WorkflowStepRunOut] = []
+    events: list[RunnerExecutionEventOut] = []
+
+
+class WorkflowRunClaimStep(BaseModel):
+    id: int
+    sequence_no: int
+    step_type: str
+    description: Optional[str] = None
+    locator_strategy: Optional[str] = None
+    locator_value: Optional[str] = None
+    locator_fallbacks_json: Optional[str] = None
+    input_value: Optional[str] = None
+    is_sensitive: bool
+    timeout_ms: Optional[int] = None
+    expected_value: Optional[str] = None
+    checkpoint_instructions: Optional[str] = None
+    evidence_policy: str
+
+    class Config:
+        from_attributes = True
+
+
+class WorkflowRunClaimOut(BaseModel):
+    """What a runner receives on a successful claim: the run plus every
+    step of the exact PUBLISHED revision it targets, in order."""
+
+    run: WorkflowRunOut
+    steps: list[WorkflowRunClaimStep]
+    lease_token: str
+    target_base_url: Optional[str] = None
+
+
+class RunnerHeartbeatRequest(BaseModel):
+    lease_token: Optional[str] = None
+
+
+class RunnerEventCreate(BaseModel):
+    event_type: str
+    actor_type: str = "RUNNER"
+    idempotency_key: Optional[str] = None
+    payload_json: Optional[str] = None
+    lease_token: str
+
+
+class StepRunStartRequest(BaseModel):
+    workflow_step_id: int
+    attempt_number: int = 1
+    lease_token: str
+
+
+class StepRunFinishRequest(BaseModel):
+    status: str
+    outcome: Optional[str] = None
+    failure_category: Optional[str] = None
+    machine_message: Optional[str] = None
+    locator_used_json: Optional[str] = None
+    lease_token: str
+
+
+class WorkflowRunCompleteRequest(BaseModel):
+    status: str
+    result_summary: Optional[str] = None
+    lease_token: str

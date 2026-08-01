@@ -16,6 +16,10 @@ import {
   listSuites,
   listRevisions,
   listCases,
+  listWorkflowRuns,
+  queueWorkflowRun,
+  getWorkflowRun,
+  cancelWorkflowRun,
 } from '../api/client'
 import { useAuth } from '../auth/AuthContext.jsx'
 import StatusBadge from '../components/StatusBadge.jsx'
@@ -53,8 +57,13 @@ export default function WorkflowDetail() {
   const [linkCases, setLinkCases] = useState([])
   const [linkCaseId, setLinkCaseId] = useState('')
 
+  const [runs, setRuns] = useState([])
+  const [expandedRunId, setExpandedRunId] = useState(null)
+  const [expandedRunDetail, setExpandedRunDetail] = useState(null)
+
   const selectedRevision = revisions.find((r) => r.id === selectedRevisionId) || null
   const isDraft = selectedRevision?.status === 'DRAFT'
+  const isPublished = selectedRevision?.status === 'PUBLISHED'
 
   const load = () => {
     setLoading(true)
@@ -84,6 +93,42 @@ export default function WorkflowDetail() {
   useEffect(() => {
     listSuites(slug).then(setLinkSuites)
   }, [slug])
+
+  const loadRuns = () => {
+    listWorkflowRuns(slug).then((all) => {
+      setRuns(all.filter((r) => revisions.some((rev) => rev.id === r.workflow_revision_id)))
+    })
+  }
+
+  useEffect(() => {
+    if (revisions.length === 0) return
+    loadRuns()
+    const interval = setInterval(loadRuns, 3000)
+    return () => clearInterval(interval)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slug, revisions.length])
+
+  useEffect(() => {
+    if (!expandedRunId) {
+      setExpandedRunDetail(null)
+      return
+    }
+    const loadDetail = () => getWorkflowRun(slug, expandedRunId).then(setExpandedRunDetail)
+    loadDetail()
+    const interval = setInterval(loadDetail, 2000)
+    return () => clearInterval(interval)
+  }, [slug, expandedRunId])
+
+  const handleQueueRun = async () => {
+    await queueWorkflowRun(slug, selectedRevisionId)
+    loadRuns()
+  }
+
+  const handleCancelRun = async (runId) => {
+    await cancelWorkflowRun(slug, runId)
+    loadRuns()
+    if (expandedRunId === runId) getWorkflowRun(slug, runId).then(setExpandedRunDetail)
+  }
 
   const handleCreateRevision = async (e) => {
     e.preventDefault()
@@ -404,6 +449,78 @@ export default function WorkflowDetail() {
                     + Link Case
                   </button>
                 </form>
+              )}
+            </div>
+
+            {/* Runs (HYB-2) */}
+            <div className="bg-white border border-gray-200 rounded-lg p-4">
+              <div className="flex items-center gap-2 mb-2">
+                <p className="text-xs font-medium text-gray-500 uppercase">Runs ({runs.length})</p>
+                {isPublished && canEdit && (
+                  <button onClick={handleQueueRun} className="ml-auto px-3 py-1.5 text-xs bg-emerald-600 text-white rounded-md hover:bg-emerald-700">
+                    Queue Run
+                  </button>
+                )}
+                {!isPublished && <p className="ml-auto text-xs text-gray-400">Publish a revision to queue a run.</p>}
+              </div>
+              {runs.length === 0 ? (
+                <p className="text-xs text-gray-400">No runs yet.</p>
+              ) : (
+                <ul className="space-y-1">
+                  {runs.map((r) => (
+                    <li key={r.id} className="border border-gray-100 rounded">
+                      <button
+                        onClick={() => setExpandedRunId((prev) => (prev === r.id ? null : r.id))}
+                        className="w-full flex items-center gap-2 px-2 py-1.5 text-xs text-left hover:bg-gray-50"
+                      >
+                        <span className="font-mono text-gray-400">#{r.id}</span>
+                        <StatusBadge status={r.status} />
+                        <span className="text-gray-500">{r.workflow_revision_label}</span>
+                        {r.cancel_requested && <span className="text-amber-600">cancel requested</span>}
+                        <span className="ml-auto text-gray-400">{expandedRunId === r.id ? '▲' : '▼'}</span>
+                      </button>
+                      {expandedRunId === r.id && expandedRunDetail && (
+                        <div className="px-3 pb-3 pt-1 border-t border-gray-50 space-y-2">
+                          <div className="flex items-center gap-2">
+                            {!['PASSED', 'FAILED', 'BLOCKED', 'CANCELLED', 'RUNNER_LOST', 'SYSTEM_ERROR'].includes(expandedRunDetail.status) && (
+                              <button onClick={() => handleCancelRun(r.id)} className="text-xs text-red-600 hover:underline">
+                                Cancel
+                              </button>
+                            )}
+                          </div>
+                          <div>
+                            <p className="text-[10px] font-medium text-gray-400 uppercase mb-1">Step Runs</p>
+                            {expandedRunDetail.step_runs.length === 0 ? (
+                              <p className="text-xs text-gray-400">No steps executed yet.</p>
+                            ) : (
+                              <ul className="space-y-0.5">
+                                {expandedRunDetail.step_runs.map((sr) => (
+                                  <li key={sr.id} className="text-xs flex items-center gap-2">
+                                    <span className="font-mono text-gray-400 w-5">{sr.sequence_no}</span>
+                                    <span className="px-1 rounded bg-gray-100">{sr.step_type}</span>
+                                    <StatusBadge status={sr.status} />
+                                    {sr.failure_category && <span className="text-red-600">{sr.failure_category}</span>}
+                                    {sr.machine_message && <span className="text-gray-500 truncate max-w-xs">{sr.machine_message}</span>}
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </div>
+                          <div>
+                            <p className="text-[10px] font-medium text-gray-400 uppercase mb-1">Events</p>
+                            <ul className="space-y-0.5 max-h-40 overflow-y-auto">
+                              {expandedRunDetail.events.map((ev) => (
+                                <li key={ev.id} className="text-xs text-gray-500">
+                                  <span className="font-mono">{ev.actor_type}</span> — {ev.event_type}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
               )}
             </div>
           </div>
