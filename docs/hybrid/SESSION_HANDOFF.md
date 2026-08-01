@@ -10,9 +10,7 @@ Supersedes the previous version of this file (written after HYB-3).
 - **HYB-1 commit**: `8d64495`
 - **HYB-2 commit**: `0071a23`
 - **HYB-3 commit**: `6c4a3f1`
-- **HYB-4 commit**: recorded at the end of this session — check
-  `git log --oneline -1 feature/hybrid-mvp` for the exact hash after
-  push (committed and pushed immediately after this file).
+- **HYB-4 commit**: `acbe56e` (pushed to `origin/feature/hybrid-mvp`).
 - **`main`** is at `bb2f539` — unaffected; all hybrid work lives only on
   `feature/hybrid-mvp`.
 - **`track-a-baseline` tag**: `bb2f539`.
