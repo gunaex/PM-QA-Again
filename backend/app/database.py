@@ -69,6 +69,13 @@ PROJECT_INDEXES: dict[str, list[str]] = {
     "defects": ["cycle_id"],
     "sign_offs": ["cycle_id"],
     "activity_log": ["changed_at"],
+    # HYB-1: workflow list/editor lookups (workflow_revisions.workflow_id
+    # for the revision-history list, workflow_steps.revision_id for the
+    # ordered step list, workflow_test_case_links for both directions of
+    # the case<->workflow link lookup).
+    "workflow_revisions": ["workflow_id"],
+    "workflow_steps": ["revision_id"],
+    "workflow_test_case_links": ["workflow_revision_id", "test_case_id"],
 }
 
 

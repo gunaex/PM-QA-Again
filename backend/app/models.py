@@ -447,3 +447,123 @@ class SignOff(ProjectBase):
     comment_md = Column(Text, nullable=True)
     actor = Column(String, nullable=False)
     acted_at = Column(DateTime, default=datetime.utcnow)
+
+
+# ---------- HYB-1: workflow model and editor ----------
+# See docs/hybrid/HYB-1-GAP-ANALYSIS-REFRESH.md for the design decisions
+# this implements. Mirrors TestSuite/ScriptRevision/TestCase's
+# immutable-revision + clone-for-correction pattern exactly (same
+# DRAFT|PUBLISHED|SUPERSEDED lifecycle) so the discipline that already
+# protects test scripts protects automated workflows too.
+
+WORKFLOW_REVISION_STATUSES = ("DRAFT", "PUBLISHED", "SUPERSEDED")
+WORKFLOW_STEP_TYPES = (
+    "NAVIGATE", "CLICK", "FILL", "SELECT", "CHECK", "UNCHECK", "PRESS_KEY",
+    "WAIT_FOR_ELEMENT", "ASSERT_VISIBLE", "ASSERT_TEXT", "ASSERT_URL",
+    "SCREENSHOT", "MANUAL_CHECKPOINT",
+)
+LOCATOR_STRATEGIES = ("TEST_ID", "ROLE", "LABEL", "PLACEHOLDER", "TEXT", "CSS", "XPATH")
+LOCATOR_SOURCES = ("MANUAL", "RECORDER", "IMPORTED")  # HYB-3 sets RECORDER
+EVIDENCE_POLICIES = ("NONE", "OPTIONAL", "REQUIRED")
+
+
+class WorkflowDefinition(ProjectBase):
+    """Stable identity across revisions — mirrors TestSuite's role for
+    ScriptRevision."""
+
+    __tablename__ = "workflow_definitions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    status = Column(String, default="ACTIVE")  # ACTIVE|ARCHIVED
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class WorkflowRevision(ProjectBase):
+    """Immutable once PUBLISHED — a correction clones into a new DRAFT,
+    exactly like ScriptRevision. This is the entity a WorkflowRun (HYB-2)
+    will point to; a run must never silently follow a newer revision."""
+
+    __tablename__ = "workflow_revisions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    workflow_id = Column(Integer, ForeignKey("workflow_definitions.id"), nullable=False)
+    revision_label = Column(String, nullable=False)
+    revision_number_sort = Column(Integer, nullable=False)
+    status = Column(String, default="DRAFT")  # see WORKFLOW_REVISION_STATUSES
+    change_summary = Column(Text, nullable=True)
+    supersedes_revision_id = Column(Integer, ForeignKey("workflow_revisions.id"), nullable=True)
+    created_by = Column(String, nullable=True)
+    published_by = Column(String, nullable=True)
+    published_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (UniqueConstraint("workflow_id", "revision_label", name="uq_workflow_revision_label"),)
+
+
+class WorkflowStep(ProjectBase):
+    """Ordered step within a DRAFT revision — mutable only while the
+    parent revision is DRAFT (enforced in the router, not the model,
+    matching TestCase's own pattern)."""
+
+    __tablename__ = "workflow_steps"
+
+    id = Column(Integer, primary_key=True, index=True)
+    revision_id = Column(Integer, ForeignKey("workflow_revisions.id"), nullable=False)
+    sequence_no = Column(Integer, nullable=False)
+    step_type = Column(String, nullable=False)  # see WORKFLOW_STEP_TYPES
+    description = Column(String, nullable=True)
+    # Structured locator (rebuild-hybrid-doc-required — never raw source
+    # code, never raw x/y). `locator_fallbacks_json` is a JSON list of
+    # {strategy, value} candidates in priority order.
+    locator_strategy = Column(String, nullable=True)  # see LOCATOR_STRATEGIES
+    locator_value = Column(String, nullable=True)
+    locator_fallbacks_json = Column(Text, nullable=True)
+    locator_source = Column(String, default="MANUAL")  # see LOCATOR_SOURCES
+    # Literal value, or a "${VAR_NAME}" reference — never a real secret
+    # value when is_sensitive is true (enforced at the router, not just
+    # documented: see workflows.py's _validate_step).
+    input_value = Column(Text, nullable=True)
+    is_sensitive = Column(Boolean, default=False)
+    timeout_ms = Column(Integer, nullable=True)
+    expected_value = Column(Text, nullable=True)
+    enabled = Column(Boolean, default=True)
+    checkpoint_instructions = Column(Text, nullable=True)  # MANUAL_CHECKPOINT only
+    evidence_policy = Column(String, default="NONE")  # see EVIDENCE_POLICIES
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class WorkflowTestCaseLink(ProjectBase):
+    """Links a workflow revision to a Track A test case.
+
+    Deliberately carries BOTH:
+      - `test_case_id`: the exact TestCase row used by this workflow
+        revision. TestCase rows are already immutable once their parent
+        ScriptRevision publishes (Phase 3 invariant) — pointing at this
+        id IS the exact immutable snapshot; it is never repointed after
+        creation, so a historical workflow run can never silently follow
+        a newer test-case revision.
+      - `logical_case_key`: copied from TestCase.logical_case_key (or
+        checkpoint_code if that's unset) at link time — the stable
+        identity used for "what's the current case for this logical
+        checkpoint" navigation/relationship queries, independent of
+        which exact revision this link snapshotted.
+    See docs/hybrid/HYB-1-GAP-ANALYSIS-REFRESH.md section 2, decision 1.
+    """
+
+    __tablename__ = "workflow_test_case_links"
+
+    id = Column(Integer, primary_key=True, index=True)
+    workflow_revision_id = Column(Integer, ForeignKey("workflow_revisions.id"), nullable=False)
+    test_case_id = Column(Integer, ForeignKey("test_cases.id"), nullable=False)
+    logical_case_key = Column(String, nullable=True)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("workflow_revision_id", "test_case_id", name="uq_workflow_revision_case"),
+    )

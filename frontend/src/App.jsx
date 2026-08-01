@@ -8,6 +8,8 @@ import RevisionDetail from './pages/RevisionDetail.jsx'
 import CycleList from './pages/CycleList.jsx'
 import CycleExecution from './pages/CycleExecution.jsx'
 import ReportsPage from './pages/ReportsPage.jsx'
+import WorkflowList from './pages/WorkflowList.jsx'
+import WorkflowDetail from './pages/WorkflowDetail.jsx'
 import LoginPage from './pages/LoginPage.jsx'
 import RequireAuth from './auth/RequireAuth.jsx'
 
@@ -39,6 +41,8 @@ function App() {
         <Route path="cycles" element={<CycleList />} />
         <Route path="cycles/:cycleId" element={<CycleExecution />} />
         <Route path="reports" element={<ReportsPage />} />
+        <Route path="workflows" element={<WorkflowList />} />
+        <Route path="workflows/:workflowId" element={<WorkflowDetail />} />
       </Route>
     </Routes>
   )

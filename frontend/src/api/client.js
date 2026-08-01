@@ -186,4 +186,37 @@ export const createSignoff = (slug, cycleId, payload) => api.post(`/${slug}/cycl
 export const exportExcelUrl = (slug, cycleId) => `${API_BASE}/${slug}/cycles/${cycleId}/export/excel`
 export const exportZipUrl = (slug, cycleId) => `${API_BASE}/${slug}/cycles/${cycleId}/export/zip`
 
+// Workflows (HYB-1)
+export const listWorkflows = (slug) => api.get(`/${slug}/workflows`).then((r) => r.data)
+export const createWorkflow = (slug, payload) => api.post(`/${slug}/workflows`, payload).then((r) => r.data)
+export const getWorkflow = (slug, workflowId) => api.get(`/${slug}/workflows/${workflowId}`).then((r) => r.data)
+export const listWorkflowRevisions = (slug, workflowId) =>
+  api.get(`/${slug}/workflows/${workflowId}/revisions`).then((r) => r.data)
+export const createWorkflowRevision = (slug, workflowId, payload) =>
+  api.post(`/${slug}/workflows/${workflowId}/revisions`, payload).then((r) => r.data)
+export const getWorkflowRevision = (slug, workflowId, revisionId) =>
+  api.get(`/${slug}/workflows/${workflowId}/revisions/${revisionId}`).then((r) => r.data)
+export const publishWorkflowRevision = (slug, workflowId, revisionId) =>
+  api.post(`/${slug}/workflows/${workflowId}/revisions/${revisionId}/publish`).then((r) => r.data)
+export const cloneWorkflowRevision = (slug, workflowId, revisionId, payload) =>
+  api.post(`/${slug}/workflows/${workflowId}/revisions/${revisionId}/clone`, payload).then((r) => r.data)
+export const listWorkflowSteps = (slug, workflowId, revisionId) =>
+  api.get(`/${slug}/workflows/${workflowId}/revisions/${revisionId}/steps`).then((r) => r.data)
+export const createWorkflowStep = (slug, workflowId, revisionId, payload) =>
+  api.post(`/${slug}/workflows/${workflowId}/revisions/${revisionId}/steps`, payload).then((r) => r.data)
+export const updateWorkflowStep = (slug, workflowId, revisionId, stepId, payload) =>
+  api.put(`/${slug}/workflows/${workflowId}/revisions/${revisionId}/steps/${stepId}`, payload).then((r) => r.data)
+export const deleteWorkflowStep = (slug, workflowId, revisionId, stepId) =>
+  api.delete(`/${slug}/workflows/${workflowId}/revisions/${revisionId}/steps/${stepId}`).then((r) => r.data)
+export const reorderWorkflowSteps = (slug, workflowId, revisionId, stepIdsInOrder) =>
+  api
+    .post(`/${slug}/workflows/${workflowId}/revisions/${revisionId}/steps/reorder`, { step_ids_in_order: stepIdsInOrder })
+    .then((r) => r.data)
+export const listWorkflowLinks = (slug, workflowId, revisionId) =>
+  api.get(`/${slug}/workflows/${workflowId}/revisions/${revisionId}/links`).then((r) => r.data)
+export const createWorkflowLink = (slug, workflowId, revisionId, testCaseId) =>
+  api.post(`/${slug}/workflows/${workflowId}/revisions/${revisionId}/links`, { test_case_id: testCaseId }).then((r) => r.data)
+export const deleteWorkflowLink = (slug, workflowId, revisionId, linkId) =>
+  api.delete(`/${slug}/workflows/${workflowId}/revisions/${revisionId}/links/${linkId}`).then((r) => r.data)
+
 export default api

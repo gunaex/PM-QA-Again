@@ -92,13 +92,23 @@ def test_project_data_is_isolated_by_slug(auth_client):
 
 
 def test_login_is_rate_limited():
-    """slowapi's 5/minute limit on /api/auth/login (routers/auth.py)."""
+    """slowapi's 5/minute limit on /api/auth/login (routers/auth.py).
+
+    The limiter's in-memory storage is process-global and keyed by
+    remote address — every TestClient in this suite shares the same fake
+    address, so deliberately exhausting the quota here would otherwise
+    poison every other test file's real login calls for the rest of this
+    pytest run (order-dependent flakiness, not a real app defect). Reset
+    it immediately after this test proves the limit exists."""
+    from app.rate_limit import limiter
+
     anon = _fresh_client()
     statuses = []
     for _ in range(7):
         r = anon.post("/api/auth/login", json={"email": "nobody@example.com", "password": "wrong"})
         statuses.append(r.status_code)
     assert 429 in statuses, f"expected a 429 within 7 rapid login attempts, got {statuses}"
+    limiter.reset()
 
 
 # ---------- CORS ----------

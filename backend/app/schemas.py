@@ -538,3 +538,133 @@ class SignOffOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# ---------- HYB-1: workflow model and editor ----------
+
+
+class WorkflowDefinitionCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+
+
+class WorkflowDefinitionOut(BaseModel):
+    id: int
+    name: str
+    description: Optional[str] = None
+    status: str
+    created_by: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    # Convenience for the list screen — avoids a second round trip per row.
+    published_revision_id: Optional[int] = None
+    published_revision_label: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class WorkflowRevisionCreate(BaseModel):
+    revision_label: str
+    change_summary: Optional[str] = None
+
+
+class WorkflowRevisionCloneRequest(BaseModel):
+    revision_label: str
+    change_summary: Optional[str] = None
+
+
+class WorkflowRevisionOut(BaseModel):
+    id: int
+    workflow_id: int
+    revision_label: str
+    revision_number_sort: int
+    status: str
+    change_summary: Optional[str] = None
+    supersedes_revision_id: Optional[int] = None
+    created_by: Optional[str] = None
+    published_by: Optional[str] = None
+    published_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class WorkflowStepCreate(BaseModel):
+    step_type: str
+    description: Optional[str] = None
+    locator_strategy: Optional[str] = None
+    locator_value: Optional[str] = None
+    locator_fallbacks_json: Optional[str] = None
+    locator_source: str = "MANUAL"
+    input_value: Optional[str] = None
+    is_sensitive: bool = False
+    timeout_ms: Optional[int] = None
+    expected_value: Optional[str] = None
+    enabled: bool = True
+    checkpoint_instructions: Optional[str] = None
+    evidence_policy: str = "NONE"
+
+
+class WorkflowStepUpdate(BaseModel):
+    step_type: Optional[str] = None
+    description: Optional[str] = None
+    locator_strategy: Optional[str] = None
+    locator_value: Optional[str] = None
+    locator_fallbacks_json: Optional[str] = None
+    locator_source: Optional[str] = None
+    input_value: Optional[str] = None
+    is_sensitive: Optional[bool] = None
+    timeout_ms: Optional[int] = None
+    expected_value: Optional[str] = None
+    enabled: Optional[bool] = None
+    checkpoint_instructions: Optional[str] = None
+    evidence_policy: Optional[str] = None
+
+
+class WorkflowStepOut(BaseModel):
+    id: int
+    revision_id: int
+    sequence_no: int
+    step_type: str
+    description: Optional[str] = None
+    locator_strategy: Optional[str] = None
+    locator_value: Optional[str] = None
+    locator_fallbacks_json: Optional[str] = None
+    locator_source: str
+    input_value: Optional[str] = None
+    is_sensitive: bool
+    timeout_ms: Optional[int] = None
+    expected_value: Optional[str] = None
+    enabled: bool
+    checkpoint_instructions: Optional[str] = None
+    evidence_policy: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class WorkflowStepReorderRequest(BaseModel):
+    step_ids_in_order: list[int]
+
+
+class WorkflowTestCaseLinkCreate(BaseModel):
+    test_case_id: int
+
+
+class WorkflowTestCaseLinkOut(BaseModel):
+    id: int
+    workflow_revision_id: int
+    test_case_id: int
+    logical_case_key: Optional[str] = None
+    created_by: Optional[str] = None
+    created_at: datetime
+    # Flattened for the editor's link list.
+    checkpoint_code: Optional[str] = None
+    case_title: Optional[str] = None
+
+    class Config:
+        from_attributes = True

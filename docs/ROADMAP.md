@@ -294,10 +294,17 @@ and the hybrid gap analysis has been refreshed —
 [HYB-1-GAP-ANALYSIS-REFRESH.md](hybrid/HYB-1-GAP-ANALYSIS-REFRESH.md).
 **Release Closure and the production-readiness decision are still
 outstanding** — the three human-operated checks in
-[RELEASE_CLOSURE.md](RELEASE_CLOSURE.md) have not been run. HYB-1 still
-does not start until those are done.
+[RELEASE_CLOSURE.md](RELEASE_CLOSURE.md) have not been run.
 
-## Track B — Hybrid manual+automation expansion (HYB-0 complete; HYB-1–HYB-5 pending)
+**Update, 2026-08-02, later same day**: the user explicitly superseded
+the "HYB-1 does not start until Release Closure" rule above for this
+delivery, reclassifying Release Closure's three checks as *release*
+blockers only, not *development* blockers — HYB-1 work is authorized to
+proceed on a dedicated `feature/hybrid-mvp` branch while Release Closure
+remains open. Production readiness is **not** claimed regardless of how
+much HYB work completes; see Track B below for HYB-1's actual status.
+
+## Track B — Hybrid manual+automation expansion (HYB-0 + HYB-1 complete; HYB-2–HYB-5 pending)
 
 Full detail lives in `QA_AGAIN_HYBRID_AI_QA_MVP_EXPANSION.md`; this is
 the index. QA-Again gains a separate **QA Runner** (Node.js + Playwright,
@@ -359,12 +366,45 @@ Delivery sequence after the spike:
   throughout, no auto-PASS on failure). Runner code lives in `runner/`
   (Node.js + TypeScript + Playwright). Track A Phases 4–7 (cycles,
   execution, evidence, reporting/export, hardening) were completed after
-  this spike, carrying the extension points above into that work. **HYB-1
-  does not start yet** — see "Release Closure — Track A" above and the
-  intended delivery sequence for what comes first.
-- **HYB-1** — workflow model and editor (`workflow_definitions`,
-  `workflow_revisions`, `workflow_steps`, draft/publish/clone, test-case
-  links, manual checkpoint editor).
+  this spike, carrying the extension points above into that work.
+  **2026-08-02: the user explicitly superseded the "HYB-1 waits on
+  Release Closure" ordering** for this delivery — Release Closure's
+  three human-operated checks remain unresolved and the project remains
+  NOT PRODUCTION READY, but they were reclassified as release blockers
+  only, not development blockers, for HYB-1 onward. HYB-1 work proceeds
+  on the `feature/hybrid-mvp` branch (not `main`).
+- **HYB-1** — workflow model and editor. **Done, 2026-08-02** — see
+  [HYB-1-GAP-ANALYSIS-REFRESH.md](hybrid/HYB-1-GAP-ANALYSIS-REFRESH.md)
+  for the design decisions (`WorkflowTestCaseLink` carries both stable
+  logical identity and the exact immutable `TestCase` snapshot; hybrid
+  evidence will reuse `EvidenceItem`/`EvidenceRevision`, not a parallel
+  subsystem — implemented starting HYB-4 when runs/checkpoints exist to
+  link against). Built: `WorkflowDefinition`/`WorkflowRevision`/
+  `WorkflowStep`/`WorkflowTestCaseLink` models (mirrors
+  `TestSuite`/`ScriptRevision`/`TestCase`'s exact DRAFT→PUBLISHED→
+  SUPERSEDED + clone-for-correction pattern), all 13 MVP step types
+  (`NAVIGATE`…`MANUAL_CHECKPOINT`), structured locators (strategy +
+  value + fallback JSON, never raw x/y), server-side validation that a
+  sensitive step's value must be a `${VAR_NAME}` placeholder (literal
+  values are rejected outright, not just discouraged by the UI),
+  reorder, publish (ADMIN-only, matching revision publish), clone,
+  test-case links, and a real frontend editor (workflow list, revision
+  list, step add/edit/delete/reorder, sensitive-variable checkbox,
+  manual-checkpoint fields, link picker). Verified: 4 new backend pytest
+  tests covering all 14 HYB-1 acceptance-gate items (create/draft/all-
+  step-types/reorder/checkpoint/sensitive-var-rejection/link/publish/
+  immutable-after-publish/clone/old-revision-unchanged/authorization-
+  boundaries/audit-log), full 45-test suite passing (was 41; +4 new),
+  frontend production build clean, and a real headed-browser Playwright
+  run through the entire editor flow (screenshots confirm the sensitive
+  placeholder is what's displayed — never a literal — and that the
+  cloned draft correctly copied all 5 steps + the link while the
+  original stayed PUBLISHED). One real pre-existing bug found and fixed
+  along the way: the login-rate-limit test in
+  `test_security_boundaries.py` deliberately exhausted slowapi's
+  process-global, IP-keyed limiter and never reset it, silently breaking
+  any test file that ran afterward and needed a real login within the
+  same test process — fixed with `limiter.reset()`.
 - **HYB-2** — runner registration and execution (registration/revocation,
   heartbeat, job claim protocol, execution state machine, Chromium
   execution, structured step results, failure categories).
