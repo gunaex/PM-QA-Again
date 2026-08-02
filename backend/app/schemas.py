@@ -918,7 +918,15 @@ class RecordedStepCreate(BaseModel):
     checkpoint_instructions: Optional[str] = None
     needs_review: bool = False
     review_note: Optional[str] = None
-    lease_token: str
+    # Optional: a Playwright-mode runner supplies lease_token (matched
+    # against RunnerToken + RecordingSession.lease_token); an extension-
+    # mode caller instead supplies the X-Extension-Session-Token header
+    # -- see recording_sessions.py::_authorize_recorder_actor. Exactly
+    # one of the two must be present; enforced there, not by a schema
+    # validator, so the 401/409 error messages stay consistent with
+    # every other dual-auth check in this app.
+    lease_token: Optional[str] = None
+    extension_token: Optional[str] = None
     idempotency_key: Optional[str] = None
 
 
@@ -946,7 +954,8 @@ class RecordingSessionClaimOut(BaseModel):
 
 
 class RecorderHeartbeatRequest(BaseModel):
-    lease_token: str
+    lease_token: Optional[str] = None  # see RecordedStepCreate.lease_token's note
+    extension_token: Optional[str] = None
     paused_ack: Optional[bool] = None
 
 
@@ -959,6 +968,24 @@ class InsertCheckpointRequest(BaseModel):
     checkpoint_instructions: str
 
 
+class ExtensionAuthorizationOut(BaseModel):
+    """Raw token shown once, exactly like RunnerTokenOut/refresh tokens."""
+
+    id: int
+    recording_session_id: int
+    token: str
+    expires_at: datetime
+    hard_cap_at: datetime
+
+
+class ExtensionConnectRequest(BaseModel):
+    extension_token: str
+
+
+class ExtensionHeartbeatRequest(BaseModel):
+    extension_token: str
+
+
 class LocatorTestResultSubmit(BaseModel):
     """Posted by the runner after evaluating a requested locator test
     against the still-live recording browser -- the exact same
@@ -968,7 +995,8 @@ class LocatorTestResultSubmit(BaseModel):
     matched_count: int
     ok: bool
     message: Optional[str] = None
-    lease_token: str
+    lease_token: Optional[str] = None
+    extension_token: Optional[str] = None
 
 
 # ---------- HYB-4: manual checkpoints and hybrid evidence ----------

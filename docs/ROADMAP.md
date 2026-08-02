@@ -877,6 +877,72 @@ Delivery sequence after the spike:
   acceptance) are still outstanding — the project remains **NOT
   PRODUCTION READY** until both are completed and recorded.
 
+- **Chrome Extension recorder (ADR-HYB-002)** — **Done, 2026-08-02**.
+  A Manifest V3 Chrome extension becomes the primary, everyday
+  recording UX (record in your own browser tab, no terminal) while the
+  existing Playwright-controlled recorder (`npm run record`) remains
+  available unchanged as the advanced/fallback mode. See
+  [ADR-HYB-002](adr/ADR-HYB-002-chrome-extension-recorder.md) for why
+  this was chosen over iframe embedding and a streamed remote browser,
+  and [docs/hybrid/CHROME_EXTENSION_RECORDER.md](hybrid/CHROME_EXTENSION_RECORDER.md)
+  for the full design.
+
+  **Backend** (additive only): a new, deliberately narrower credential
+  — `RecordingSessionAuthorization` — scoped to exactly one
+  `recording_session_id`, short-lived (30 min, renewable up to a 4-hour
+  hard cap), revoked on stop/expiry. Never the tester's own JWT, never
+  the global `RunnerToken`. The existing runner-facing endpoints
+  (`/steps`, `/heartbeat`, locator-test endpoints) and the existing
+  tester-facing controls (`pause`/`resume`/`stop`) now accept *either*
+  a `RunnerToken`+lease (Playwright mode, unchanged) *or* this new
+  scoped authorization (extension mode) — no parallel endpoint set, no
+  parallel `RecordingSession`/`RecordedStep` model. One new control:
+  `POST .../undo-last-step` (repeatable, walks back to an empty
+  buffer), available from both the extension popup and QA-Again's own
+  UI, requested mid-session by the user alongside the original spec.
+  **A real, pre-existing bug was found and fixed**: idempotent replay
+  for `RecordedStep` never actually worked (checked a marker that was
+  never written) — fixed with a dedicated `idempotency_key` column,
+  now covered by a regression test.
+
+  **Extension** (`extension/`, new): `manifest.json` declares zero
+  `host_permissions` — only `activeTab`/`scripting`/`storage` plus
+  `optional_host_permissions` requested narrowly, per-use, for exactly
+  the one backend origin the tester types in (a real Chrome permission
+  prompt naming that origin, never a broader grant). `content.js`
+  ports the exact same locator-priority (`data-testid` → role+name →
+  label → stable attribute → text → CSS) and redaction logic as
+  `runner/src/recorder/domRecorder.ts` for parity between both modes —
+  a password-type or heuristically-sensitive field is captured as
+  `is_sensitive: true` with `input_value` omitted entirely before the
+  very first message leaves the content script. No global OS input
+  hook, no cookie/`localStorage`/header access (no permission grants
+  that visibility at all). `background.js` forwards captured events,
+  injects the content script only after the user's own "Start
+  Recording" click, and reports real navigations via
+  `chrome.tabs.onUpdated`.
+
+  **Verified with a real headed Chromium loading the real, unpacked
+  extension** (`runner/scripts/verify-extension.mjs`): real service-
+  worker registration, real connect, real DOM capture (FILL/FILL/
+  CLICK/PRESS_KEY with correct locators), real password redaction
+  (confirmed the real value never reached the backend), real pause/
+  resume, real repeatable undo, real stop + immediate authorization
+  revocation, real human-review placeholder assignment, real save-as-
+  draft + publish, and **real replay through the unmodified, existing
+  QA Runner — PASSED**, all 4 steps green. One documented, disclosed
+  human-only boundary: Chrome's native permission-prompt UI (as
+  opposed to page content) cannot be dismissed by browser automation,
+  same category as this project's existing Screen Capture/clipboard-
+  paste human-operated checks — confirmed once by hand, and the
+  automated harness proves everything downstream of that one click
+  using a test-only copy of the real extension with the target origins
+  pre-granted (every file otherwise byte-identical to what ships).
+  Full record: [docs/hybrid/CHROME_EXTENSION_VERIFICATION.md](hybrid/CHROME_EXTENSION_VERIFICATION.md).
+
+  Full backend suite: **102/102** passing (95 + 7 new extension tests).
+  Frontend build clean. Runner typecheck clean.
+
 Explicit non-goals for the hybrid MVP (hybrid doc section 13): full
 load/stress/soak testing, mobile/desktop app automation, continuous
 video, AI autonomous sign-off or final pass/fail decisions, automatic

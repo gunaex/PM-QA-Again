@@ -271,6 +271,10 @@ export const pauseRecordingSession = (slug, sessionId) => api.post(`/${slug}/rec
 export const resumeRecordingSession = (slug, sessionId) => api.post(`/${slug}/recording-sessions/${sessionId}/resume`).then((r) => r.data)
 export const stopRecordingSession = (slug, sessionId) => api.post(`/${slug}/recording-sessions/${sessionId}/stop`).then((r) => r.data)
 export const discardRecordingSession = (slug, sessionId) => api.post(`/${slug}/recording-sessions/${sessionId}/discard`).then((r) => r.data)
+export const undoLastRecordedStep = (slug, sessionId) => api.post(`/${slug}/recording-sessions/${sessionId}/undo-last-step`).then((r) => r.data)
+// ADR-HYB-002: mints the short-lived, session-scoped token the tester
+// pastes into the Chrome extension popup -- never the tester's own JWT.
+export const authorizeExtension = (slug, sessionId) => api.post(`/${slug}/recording-sessions/${sessionId}/authorize-extension`).then((r) => r.data)
 export const insertRecordingCheckpoint = (slug, sessionId, checkpointInstructions) =>
   api.post(`/${slug}/recording-sessions/${sessionId}/insert-checkpoint`, { checkpoint_instructions: checkpointInstructions }).then((r) => r.data)
 export const updateRecordedStep = (slug, sessionId, stepId, payload) =>

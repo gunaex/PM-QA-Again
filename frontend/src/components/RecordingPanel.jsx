@@ -6,6 +6,8 @@ import {
   resumeRecordingSession,
   stopRecordingSession,
   discardRecordingSession,
+  undoLastRecordedStep,
+  authorizeExtension,
   insertRecordingCheckpoint,
   updateRecordedStep,
   deleteRecordedStep,
@@ -29,6 +31,7 @@ export default function RecordingPanel({ slug, workflowId, canEdit, onDraftSaved
   const [revisionLabel, setRevisionLabel] = useState('')
   const [error, setError] = useState(null)
   const [saving, setSaving] = useState(false)
+  const [extensionToken, setExtensionToken] = useState(null)
 
   useEffect(() => {
     if (!session?.id) return
@@ -52,6 +55,23 @@ export default function RecordingPanel({ slug, workflowId, canEdit, onDraftSaved
   const handlePause = () => pauseRecordingSession(slug, session.id).then(refresh)
   const handleResume = () => resumeRecordingSession(slug, session.id).then(refresh)
   const handleStop = () => stopRecordingSession(slug, session.id).then(refresh)
+  const handleUndo = async () => {
+    try {
+      await undoLastRecordedStep(slug, session.id)
+      refresh()
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Could not undo the last step')
+    }
+  }
+  const handleAuthorizeExtension = async () => {
+    setError(null)
+    try {
+      const result = await authorizeExtension(slug, session.id)
+      setExtensionToken(result.token)
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Could not authorize the extension')
+    }
+  }
   const handleDiscard = async () => {
     if (!window.confirm('Discard this recording? All captured steps will be deleted.')) return
     await discardRecordingSession(slug, session.id)
@@ -144,13 +164,23 @@ export default function RecordingPanel({ slug, workflowId, canEdit, onDraftSaved
       <div className="flex items-center gap-2 flex-wrap">
         <p className="text-xs font-medium text-gray-500 uppercase">Recording Session #{session.id}</p>
         <StatusBadge status={session.status} />
-        {ACTIVE_STATUSES.has(session.status) && (
-          <span className="text-xs text-gray-400">waiting for a runner process to claim/execute this session…</span>
+        {session.status === 'REQUESTED' && (
+          <span className="text-xs text-gray-400">waiting for a runner process (advanced mode) or the Chrome extension to connect…</span>
         )}
         <div className="ml-auto flex gap-2">
           {isRecording && (
+            <button onClick={handleUndo} className="px-2 py-1 text-xs border border-gray-300 rounded hover:bg-gray-50">
+              Undo last action
+            </button>
+          )}
+          {isRecording && (
             <button onClick={handlePause} className="px-2 py-1 text-xs border border-gray-300 rounded hover:bg-gray-50">
               Pause Recording
+            </button>
+          )}
+          {isPaused && (
+            <button onClick={handleUndo} className="px-2 py-1 text-xs border border-gray-300 rounded hover:bg-gray-50">
+              Undo last action
             </button>
           )}
           {isPaused && (
@@ -170,6 +200,32 @@ export default function RecordingPanel({ slug, workflowId, canEdit, onDraftSaved
           )}
         </div>
       </div>
+
+      {session.status === 'REQUESTED' && (
+        <div className="border border-dashed border-gray-200 rounded-md p-3 text-xs space-y-2">
+          <p className="text-gray-500">
+            <strong>Everyday mode:</strong> use the QA-Again Recorder Chrome extension in your own browser tab — no
+            terminal needed.
+          </p>
+          {!extensionToken ? (
+            <button onClick={handleAuthorizeExtension} className="px-3 py-1.5 border border-emerald-300 text-emerald-700 rounded hover:bg-emerald-50">
+              Authorize Extension
+            </button>
+          ) : (
+            <div className="bg-gray-50 rounded p-2 space-y-1">
+              <p className="text-gray-500">
+                Paste this into the extension popup along with this backend's URL, project slug (<code>{slug}</code>), and
+                session ID (<code>{session.id}</code>). Shown once — copy it now.
+              </p>
+              <code className="block break-all bg-white border border-gray-200 rounded px-2 py-1 select-all">{extensionToken}</code>
+            </div>
+          )}
+          <p className="text-gray-400">
+            Advanced/fallback mode (unchanged): run <code>npm run record</code> in <code>runner/</code> against this same
+            session.
+          </p>
+        </div>
+      )}
 
       {(isRecording || isPaused) && (
         <form onSubmit={handleInsertCheckpoint} className="flex gap-2">

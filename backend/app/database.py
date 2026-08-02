@@ -62,6 +62,11 @@ PROJECT_COLUMN_PATCHES: dict[str, dict[str, str]] = {
     "workflow_runs": {
         "checkpoint_waiting_since": "DATETIME",
     },
+    # ADR-HYB-002: Chrome extension recorder link on existing
+    # recording_sessions rows.
+    "recording_sessions": {
+        "extension_authorization_id": "INTEGER",
+    },
     "defects": {
         "workflow_run_id": "INTEGER",
         "workflow_step_run_id": "INTEGER",
@@ -111,7 +116,10 @@ PROJECT_INDEXES: dict[str, list[str]] = {
     "runner_execution_events": ["workflow_run_id", "event_type"],
     # HYB-3: recording-session claim/list and recorded-step ordering.
     "recording_sessions": ["workflow_id", "status"],
-    "recorded_steps": ["recording_session_id"],
+    # ADR-HYB-002: extension-auth lookup by session (scoping check) and
+    # expiry sweep.
+    "recording_session_authorizations": ["recording_session_id", "expires_at"],
+    "recorded_steps": ["recording_session_id", "idempotency_key"],
     # HYB-4: checkpoint-decision history lookups (by run, and by the
     # (run,step) pair used to compute the next decision_revision_no).
     "workflow_checkpoint_decisions": ["workflow_run_id", "workflow_step_id"],

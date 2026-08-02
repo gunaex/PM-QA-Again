@@ -11,6 +11,7 @@ human reviews, edits, and explicitly saves -- never an auto-published
 workflow revision.
 """
 import json
+import secrets
 import uuid
 from datetime import datetime, timedelta
 
@@ -56,8 +57,115 @@ def _expire_stale_leases(db: Session):
     )
     for session in stale:
         session.status = "RUNNER_LOST"
-    if stale:
+
+    # ADR-HYB-002: an extension-mode session (no lease_token/runner_id at
+    # all) goes stale the same honest way -- its bound authorization
+    # expired or hit its hard cap without the extension stopping the
+    # session cleanly first (e.g. the tester closed the tab/browser).
+    stale_ext = (
+        db.query(models.RecordingSession)
+        .join(
+            models.RecordingSessionAuthorization,
+            models.RecordingSessionAuthorization.id == models.RecordingSession.extension_authorization_id,
+        )
+        .filter(
+            models.RecordingSession.status.in_(models.RECORDING_SESSION_LEASED_STATUSES),
+            models.RecordingSessionAuthorization.revoked == False,  # noqa: E712
+            (models.RecordingSessionAuthorization.expires_at < now) | (models.RecordingSessionAuthorization.hard_cap_at < now),
+        )
+        .all()
+    )
+    for session in stale_ext:
+        session.status = "RUNNER_LOST"
+    if stale or stale_ext:
         db.commit()
+
+
+def _issue_extension_authorization(db: Session, session_id: int, issued_by: str) -> tuple[str, models.RecordingSessionAuthorization]:
+    raw_token = secrets.token_urlsafe(32)
+    now = datetime.utcnow()
+    record = models.RecordingSessionAuthorization(
+        recording_session_id=session_id,
+        token_hash=_hash_token(raw_token),
+        issued_by=issued_by,
+        expires_at=now + timedelta(seconds=models.RECORDING_SESSION_AUTH_DURATION_SECONDS),
+        hard_cap_at=now + timedelta(seconds=models.RECORDING_SESSION_AUTH_HARD_CAP_SECONDS),
+    )
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return raw_token, record
+
+
+def _get_valid_extension_auth(db: Session, session_id: int, raw_token: str) -> models.RecordingSessionAuthorization:
+    now = datetime.utcnow()
+    auth = (
+        db.query(models.RecordingSessionAuthorization)
+        .filter(
+            models.RecordingSessionAuthorization.recording_session_id == session_id,
+            models.RecordingSessionAuthorization.token_hash == _hash_token(raw_token),
+            models.RecordingSessionAuthorization.revoked == False,  # noqa: E712
+        )
+        .first()
+    )
+    if not auth or auth.expires_at < now or auth.hard_cap_at < now:
+        raise HTTPException(status_code=401, detail="Invalid, expired, or revoked extension recording authorization")
+    return auth
+
+
+def _authorize_recorder_actor(
+    request: Request,
+    db: Session,
+    master_db: Session,
+    session: models.RecordingSession,
+    lease_token: str | None,
+    extension_token: str | None,
+) -> str:
+    """Used by the endpoints an active recorder (either mode) calls
+    while capturing: /steps, /heartbeat, pending-locator-tests,
+    locator-test-result. Exactly one of lease_token (Playwright-mode
+    runner) or extension_token (extension mode) must be a valid,
+    scoped credential. Returns 'RUNNER' or 'EXTENSION'."""
+    if extension_token:
+        _get_valid_extension_auth(db, session.id, extension_token)
+        return "EXTENSION"
+    if lease_token:
+        raw_token = request.headers.get("X-Runner-Token")
+        if not raw_token:
+            raise HTTPException(status_code=401, detail="Missing X-Runner-Token header")
+        runner = (
+            master_db.query(models.RunnerToken)
+            .filter(models.RunnerToken.token_hash == _hash_token(raw_token), models.RunnerToken.revoked == False)  # noqa: E712
+            .first()
+        )
+        if not runner:
+            raise HTTPException(status_code=401, detail="Invalid or revoked runner token")
+        runner.last_heartbeat_at = datetime.utcnow()
+        master_db.commit()
+        _require_lease(session, runner, lease_token)
+        return "RUNNER"
+    raise HTTPException(status_code=401, detail="Provide lease_token (Playwright-mode runner) or extension_token (extension mode)")
+
+
+def _authorize_human_or_extension(
+    request: Request,
+    db: Session,
+    master_db: Session,
+    session: models.RecordingSession,
+    extension_token: str | None,
+) -> str:
+    """Used by the tester-facing controls (pause/resume/stop/undo) so
+    the extension popup can call them directly with its own short-lived,
+    session-scoped token -- never the tester's full JWT. Falls back to
+    the normal authenticated user session when no extension_token is
+    given (QA-Again's own UI)."""
+    if extension_token:
+        _get_valid_extension_auth(db, session.id, extension_token)
+        return "EXTENSION"
+    user = get_current_user(request=request, db=master_db)
+    if user.role not in ("ADMIN", "TESTER"):
+        raise HTTPException(status_code=403, detail=f"Role '{user.role}' is not permitted to perform this action")
+    return user.email
 
 
 def _get_session(db: Session, session_id: int) -> models.RecordingSession:
@@ -121,8 +229,12 @@ def get_session(slug: str, session_id: int, request: Request, db: Session = Depe
 
 
 @router.post("/{session_id}/pause", response_model=schemas.RecordingSessionOut)
-def pause_session(slug: str, session_id: int, db: Session = Depends(get_project_db), _user: models.User = Depends(require_tester)):
+def pause_session(
+    slug: str, session_id: int, request: Request, extension_token: str | None = None,
+    db: Session = Depends(get_project_db), master_db: Session = Depends(get_master_db),
+):
     session = _get_session(db, session_id)
+    _authorize_human_or_extension(request, db, master_db, session, extension_token)
     if session.status != "RECORDING":
         raise HTTPException(status_code=400, detail=f"Can only pause a RECORDING session (current status: {session.status})")
     session.status = "PAUSED"
@@ -132,8 +244,12 @@ def pause_session(slug: str, session_id: int, db: Session = Depends(get_project_
 
 
 @router.post("/{session_id}/resume", response_model=schemas.RecordingSessionOut)
-def resume_session(slug: str, session_id: int, db: Session = Depends(get_project_db), _user: models.User = Depends(require_tester)):
+def resume_session(
+    slug: str, session_id: int, request: Request, extension_token: str | None = None,
+    db: Session = Depends(get_project_db), master_db: Session = Depends(get_master_db),
+):
     session = _get_session(db, session_id)
+    _authorize_human_or_extension(request, db, master_db, session, extension_token)
     if session.status != "PAUSED":
         raise HTTPException(status_code=400, detail=f"Can only resume a PAUSED session (current status: {session.status})")
     session.status = "RECORDING"
@@ -143,14 +259,57 @@ def resume_session(slug: str, session_id: int, db: Session = Depends(get_project
 
 
 @router.post("/{session_id}/stop", response_model=schemas.RecordingSessionOut)
-def stop_session(slug: str, session_id: int, db: Session = Depends(get_project_db), _user: models.User = Depends(require_tester)):
+def stop_session(
+    slug: str, session_id: int, request: Request, extension_token: str | None = None,
+    db: Session = Depends(get_project_db), master_db: Session = Depends(get_master_db),
+):
     session = _get_session(db, session_id)
+    _authorize_human_or_extension(request, db, master_db, session, extension_token)
     if session.status not in ("RECORDING", "PAUSED", "CLAIMED"):
         raise HTTPException(status_code=400, detail=f"Cannot stop a session in status {session.status}")
     session.status = "STOPPED"
+    # ADR-HYB-002: revoke the extension authorization immediately on stop
+    # -- it must never remain usable after the tester has ended the
+    # session, matching "revoke authorization when the session stops or
+    # expires".
+    if session.extension_authorization_id:
+        auth = db.query(models.RecordingSessionAuthorization).filter(models.RecordingSessionAuthorization.id == session.extension_authorization_id).first()
+        if auth:
+            auth.revoked = True
+            auth.revoked_at = datetime.utcnow()
     db.commit()
     db.refresh(session)
     return session
+
+
+@router.post("/{session_id}/undo-last-step", response_model=schemas.RecordingSessionDetailOut)
+def undo_last_step(
+    slug: str, session_id: int, request: Request, extension_token: str | None = None,
+    db: Session = Depends(get_project_db), master_db: Session = Depends(get_master_db),
+):
+    """Removes exactly the single most-recently-captured step, live,
+    while still RECORDING/PAUSED -- callable repeatedly to walk back to
+    an empty buffer. Available from both the extension popup and
+    QA-Again's own RecordingPanel (see docs/hybrid/
+    CHROME_EXTENSION_RECORDER.md's "Undo last step" section). Distinct
+    from DELETE .../steps/{id} (any step, only once STOPPED, used
+    during considered review) -- this is the in-the-moment correction
+    control."""
+    session = _get_session(db, session_id)
+    _authorize_human_or_extension(request, db, master_db, session, extension_token)
+    if session.status not in ("RECORDING", "PAUSED"):
+        raise HTTPException(status_code=400, detail=f"Can only undo the last step while RECORDING or PAUSED (current status: {session.status})")
+    last_step = (
+        db.query(models.RecordedStep)
+        .filter(models.RecordedStep.recording_session_id == session_id)
+        .order_by(models.RecordedStep.sequence_no.desc())
+        .first()
+    )
+    if not last_step:
+        raise HTTPException(status_code=400, detail="No recorded steps to undo -- already at the start")
+    db.delete(last_step)
+    db.commit()
+    return _to_detail(db, session)
 
 
 @router.post("/{session_id}/discard", response_model=schemas.RecordingSessionOut)
@@ -160,6 +319,11 @@ def discard_session(slug: str, session_id: int, db: Session = Depends(get_projec
         raise HTTPException(status_code=400, detail="Cannot discard a session that was already saved as a draft")
     db.query(models.RecordedStep).filter(models.RecordedStep.recording_session_id == session_id).delete()
     session.status = "DISCARDED"
+    if session.extension_authorization_id:
+        auth = db.query(models.RecordingSessionAuthorization).filter(models.RecordingSessionAuthorization.id == session.extension_authorization_id).first()
+        if auth:
+            auth.revoked = True
+            auth.revoked_at = datetime.utcnow()
     db.commit()
     db.refresh(session)
     return session
@@ -331,6 +495,49 @@ def save_as_draft(
     return revision
 
 
+# ---------- ADR-HYB-002: Chrome extension authorization ----------
+
+
+@router.post("/{session_id}/authorize-extension", response_model=schemas.ExtensionAuthorizationOut)
+def authorize_extension(
+    slug: str, session_id: int, db: Session = Depends(get_project_db), user: models.User = Depends(require_tester),
+):
+    """Mints a short-lived, session-scoped authorization the extension
+    presents on every subsequent call -- never the tester's own JWT,
+    never the global RunnerToken. Called from QA-Again's own UI (the
+    tester's real login session), which then hands the raw token to the
+    extension out-of-band (e.g. a pairing code the tester copies into
+    the popup). The session must still be REQUESTED -- an authorization
+    is minted once, for the one session it's about to connect."""
+    session = _get_session(db, session_id)
+    if session.status != "REQUESTED":
+        raise HTTPException(status_code=400, detail=f"Can only authorize a REQUESTED session (current status: {session.status})")
+    raw_token, record = _issue_extension_authorization(db, session_id, user.email)
+    return schemas.ExtensionAuthorizationOut(
+        id=record.id, recording_session_id=session_id, token=raw_token,
+        expires_at=record.expires_at, hard_cap_at=record.hard_cap_at,
+    )
+
+
+@router.post("/{session_id}/extension-connect", response_model=schemas.RecordingSessionOut)
+def extension_connect(slug: str, session_id: int, payload: schemas.ExtensionConnectRequest, db: Session = Depends(get_project_db)):
+    """Extension-mode equivalent of /claim + /recording-started combined
+    -- there is no FIFO-poll claim step here (the token is already
+    scoped to this exact session), so connecting goes straight to
+    RECORDING once the extension's content script confirms it's
+    attached (mirrors the Playwright mode's own "only RECORDING once
+    genuinely true" discipline)."""
+    session = _get_session(db, session_id)
+    auth = _get_valid_extension_auth(db, session_id, payload.extension_token)
+    if session.status != "REQUESTED":
+        raise HTTPException(status_code=400, detail=f"This session is not awaiting connection (current status: {session.status})")
+    session.status = "RECORDING"
+    session.extension_authorization_id = auth.id
+    db.commit()
+    db.refresh(session)
+    return session
+
+
 # ---------- runner-facing: claim / heartbeat / append steps / locator-test result ----------
 
 
@@ -376,21 +583,35 @@ def mark_recording_started(slug: str, session_id: int, lease_token: str, db: Ses
 
 
 @router.post("/{session_id}/heartbeat", response_model=schemas.RecordingSessionOut)
-def heartbeat(slug: str, session_id: int, payload: schemas.RecorderHeartbeatRequest, db: Session = Depends(get_project_db), runner: models.RunnerToken = Depends(get_current_runner)):
+def heartbeat(
+    slug: str, session_id: int, payload: schemas.RecorderHeartbeatRequest, request: Request,
+    db: Session = Depends(get_project_db), master_db: Session = Depends(get_master_db),
+):
     _expire_stale_leases(db)
     session = _get_session(db, session_id)
     if session.status in models.RECORDING_SESSION_LEASED_STATUSES:
-        _require_lease(session, runner, payload.lease_token)
-        session.lease_expires_at = datetime.utcnow() + timedelta(seconds=LEASE_DURATION_SECONDS)
+        actor = _authorize_recorder_actor(request, db, master_db, session, payload.lease_token, payload.extension_token)
+        if actor == "RUNNER":
+            session.lease_expires_at = datetime.utcnow() + timedelta(seconds=LEASE_DURATION_SECONDS)
+        else:
+            # ADR-HYB-002: renew the extension's own short-lived
+            # authorization, never past its hard cap -- a genuinely
+            # short-lived credential, not indefinitely renewable.
+            auth = db.query(models.RecordingSessionAuthorization).filter(models.RecordingSessionAuthorization.id == session.extension_authorization_id).first()
+            now = datetime.utcnow()
+            auth.expires_at = min(now + timedelta(seconds=models.RECORDING_SESSION_AUTH_DURATION_SECONDS), auth.hard_cap_at)
         db.commit()
         db.refresh(session)
     return session
 
 
 @router.post("/{session_id}/steps", response_model=schemas.RecordedStepOut)
-def append_recorded_step(slug: str, session_id: int, payload: schemas.RecordedStepCreate, db: Session = Depends(get_project_db), runner: models.RunnerToken = Depends(get_current_runner)):
+def append_recorded_step(
+    slug: str, session_id: int, payload: schemas.RecordedStepCreate, request: Request,
+    db: Session = Depends(get_project_db), master_db: Session = Depends(get_master_db),
+):
     session = _get_session(db, session_id)
-    _require_lease(session, runner, payload.lease_token)
+    _authorize_recorder_actor(request, db, master_db, session, payload.lease_token, payload.extension_token)
     if session.status not in ("RECORDING",):
         raise HTTPException(status_code=400, detail=f"Cannot append a step while the session is {session.status} (must be RECORDING)")
 
@@ -401,13 +622,13 @@ def append_recorded_step(slug: str, session_id: int, payload: schemas.RecordedSt
         # (sequence_no) simpler to reason about than a nullable-unique index.
         dup = (
             db.query(models.RecordedStep)
-            .filter(models.RecordedStep.recording_session_id == session_id, models.RecordedStep.review_note == f"idem:{payload.idempotency_key}")
+            .filter(models.RecordedStep.recording_session_id == session_id, models.RecordedStep.idempotency_key == payload.idempotency_key)
             .first()
         )
         if dup:
             return dup
 
-    fields = payload.model_dump(exclude={"lease_token", "idempotency_key"})
+    fields = payload.model_dump(exclude={"lease_token", "extension_token"})
     if payload.step_type not in models.WORKFLOW_STEP_TYPES:
         raise HTTPException(status_code=400, detail=f"step_type must be one of {models.WORKFLOW_STEP_TYPES}")
     if fields.get("is_sensitive") and fields.get("input_value"):
@@ -428,9 +649,12 @@ def append_recorded_step(slug: str, session_id: int, payload: schemas.RecordedSt
 
 
 @router.get("/{session_id}/pending-locator-tests", response_model=list[schemas.RecordedStepOut])
-def list_pending_locator_tests(slug: str, session_id: int, lease_token: str, db: Session = Depends(get_project_db), runner: models.RunnerToken = Depends(get_current_runner)):
+def list_pending_locator_tests(
+    slug: str, session_id: int, request: Request, lease_token: str | None = None, extension_token: str | None = None,
+    db: Session = Depends(get_project_db), master_db: Session = Depends(get_master_db),
+):
     session = _get_session(db, session_id)
-    _require_lease(session, runner, lease_token)
+    _authorize_recorder_actor(request, db, master_db, session, lease_token, extension_token)
     return (
         db.query(models.RecordedStep)
         .filter(models.RecordedStep.recording_session_id == session_id, models.RecordedStep.locator_test_requested == True)  # noqa: E712
@@ -439,9 +663,12 @@ def list_pending_locator_tests(slug: str, session_id: int, lease_token: str, db:
 
 
 @router.post("/{session_id}/steps/{step_id}/locator-test-result", response_model=schemas.RecordedStepOut)
-def submit_locator_test_result(slug: str, session_id: int, step_id: int, payload: schemas.LocatorTestResultSubmit, db: Session = Depends(get_project_db), runner: models.RunnerToken = Depends(get_current_runner)):
+def submit_locator_test_result(
+    slug: str, session_id: int, step_id: int, payload: schemas.LocatorTestResultSubmit, request: Request,
+    db: Session = Depends(get_project_db), master_db: Session = Depends(get_master_db),
+):
     session = _get_session(db, session_id)
-    _require_lease(session, runner, payload.lease_token)
+    _authorize_recorder_actor(request, db, master_db, session, payload.lease_token, payload.extension_token)
     step = db.query(models.RecordedStep).filter(models.RecordedStep.id == step_id, models.RecordedStep.recording_session_id == session_id).first()
     if not step:
         raise HTTPException(status_code=404, detail="Recorded step not found")

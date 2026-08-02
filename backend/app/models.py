@@ -814,6 +814,12 @@ class RecordingSession(ProjectBase):
     lease_expires_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    # ADR-HYB-002: set when this session is populated via the Chrome
+    # extension mode instead of the Playwright-controlled runner mode --
+    # mutually exclusive with runner_id in practice (a session is
+    # recorded by one or the other), both nullable so neither mode
+    # requires the other's column.
+    extension_authorization_id = Column(Integer, ForeignKey("recording_session_authorizations.id"), nullable=True)
 
 
 class RecordedStep(ProjectBase):
@@ -854,9 +860,46 @@ class RecordedStep(ProjectBase):
     # time per step is all the MVP needs.
     locator_test_requested = Column(Boolean, default=False)
     locator_test_result_json = Column(Text, nullable=True)
+    # ADR-HYB-002 fix: idempotent replay was previously (incorrectly)
+    # checked against `review_note` with a key that was never actually
+    # written there -- a real pre-existing bug (idempotency silently
+    # never worked for either recording mode). A dedicated column, set
+    # whenever the caller supplies one, fixes this for both modes.
+    idempotency_key = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     # No DB-level uniqueness on (recording_session_id, sequence_no) --
     # matches WorkflowStep's own reorder endpoint (HYB-1), which relies
     # on application-level ordering rather than a constraint, precisely
     # to avoid an intermediate collision while a batch of UPDATEs is
     # mid-flight during a reorder.
+
+
+# ---------- Chrome extension recorder (ADR-HYB-002) ----------
+# A deliberately narrower credential than either the tester's own JWT
+# (long-lived, every project) or the global RunnerToken (long-lived,
+# every project): scoped to exactly one recording_session_id, short-
+# lived, revoked on stop/expiry. See
+# docs/hybrid/CHROME_EXTENSION_RECORDER.md for the full design. This is
+# the ONLY new table this feature adds -- RecordingSession/RecordedStep
+# and every review/save-as-draft/publish code path are fully reused,
+# unchanged.
+
+RECORDING_SESSION_AUTH_DURATION_SECONDS = 30 * 60  # 30 min per renewal
+RECORDING_SESSION_AUTH_HARD_CAP_SECONDS = 4 * 60 * 60  # 4 hours total, never renewed past this
+
+
+class RecordingSessionAuthorization(ProjectBase):
+    __tablename__ = "recording_session_authorizations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    recording_session_id = Column(Integer, ForeignKey("recording_sessions.id"), nullable=False)
+    token_hash = Column(String, nullable=False, index=True)
+    issued_by = Column(String, nullable=False)
+    issued_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=False)
+    # Hard cap on total lifetime regardless of renewal -- see
+    # RECORDING_SESSION_AUTH_HARD_CAP_SECONDS. A heartbeat past this
+    # point is rejected even though expires_at hasn't been reached yet.
+    hard_cap_at = Column(DateTime, nullable=False)
+    revoked = Column(Boolean, default=False)
+    revoked_at = Column(DateTime, nullable=True)
