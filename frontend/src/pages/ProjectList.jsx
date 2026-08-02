@@ -8,7 +8,9 @@ import { useAuth } from '../auth/AuthContext.jsx'
 export default function ProjectList() {
   const { user } = useAuth()
   const isAdmin = user?.role === 'ADMIN'
-  const canCreate = user?.role === 'ADMIN' || user?.role === 'TESTER'
+  // ADR-0003: project creation is ADMIN-only -- a TESTER's project access
+  // is always an explicit membership grant, never implicit from creating it.
+  const canCreate = isAdmin
   const [projects, setProjects] = useState([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(null)
@@ -69,6 +71,11 @@ export default function ProjectList() {
               </label>
             )}
             {isAdmin && (
+              <NavLink to="/users" className="text-sm text-gray-500 hover:text-gray-800">
+                Users
+              </NavLink>
+            )}
+            {isAdmin && (
               <NavLink to="/runners" className="text-sm text-gray-500 hover:text-gray-800">
                 Runners
               </NavLink>
@@ -111,7 +118,11 @@ export default function ProjectList() {
             </button>
           </div>
         ) : projects.length === 0 ? (
-          <p className="text-gray-500 text-sm">No projects yet. Create one above.</p>
+          <p className="text-gray-500 text-sm">
+            {canCreate
+              ? 'No projects yet. Create one above.'
+              : "No projects assigned to your account yet — ask an admin to grant you access."}
+          </p>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {projects.map((p) => (

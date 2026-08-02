@@ -42,6 +42,16 @@ export const changePassword = (currentPassword, newPassword) =>
     .post('/auth/change-password', { current_password: currentPassword, new_password: newPassword })
     .then((r) => r.data)
 
+// User management (ADMIN only) + project membership (ADR-0003)
+export const listUsers = () => api.get('/auth/users').then((r) => r.data)
+export const createUser = (email, password, role) => api.post('/auth/users', { email, password, role }).then((r) => r.data)
+export const setUserActive = (userId, active) => api.put(`/auth/users/${userId}`, { active }).then((r) => r.data)
+export const listUserProjects = (userId) => api.get(`/auth/users/${userId}/projects`).then((r) => r.data)
+export const addUserProject = (userId, projectId) =>
+  api.post(`/auth/users/${userId}/projects`, { project_id: projectId }).then((r) => r.data)
+export const removeUserProject = (userId, projectId) =>
+  api.delete(`/auth/users/${userId}/projects/${projectId}`).then((r) => r.data)
+
 // Projects
 export const listProjects = (includeArchived = false) =>
   api.get('/projects', { params: { include_archived: includeArchived } }).then((r) => r.data)

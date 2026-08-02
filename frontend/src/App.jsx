@@ -12,6 +12,7 @@ import HybridReportsPage from './pages/HybridReportsPage.jsx'
 import WorkflowList from './pages/WorkflowList.jsx'
 import WorkflowDetail from './pages/WorkflowDetail.jsx'
 import RunnerList from './pages/RunnerList.jsx'
+import UsersPage from './pages/UsersPage.jsx'
 import LoginPage from './pages/LoginPage.jsx'
 import RequireAuth from './auth/RequireAuth.jsx'
 
@@ -32,6 +33,14 @@ function App() {
         element={
           <RequireAuth>
             <RunnerList />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/users"
+        element={
+          <RequireAuth>
+            <UsersPage />
           </RequireAuth>
         }
       />
