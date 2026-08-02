@@ -54,7 +54,8 @@ export const deleteProject = (slug, password) =>
   api.delete(`/projects/${slug}`, { data: { password } }).then((r) => r.data)
 
 // Test suites
-export const listSuites = (slug) => api.get(`/${slug}/suites`).then((r) => r.data)
+export const listSuites = (slug, includeSystemGenerated = false) =>
+  api.get(`/${slug}/suites`, { params: { include_system_generated: includeSystemGenerated } }).then((r) => r.data)
 export const createSuite = (slug, payload) => api.post(`/${slug}/suites`, payload).then((r) => r.data)
 export const getSuite = (slug, suiteId) => api.get(`/${slug}/suites/${suiteId}`).then((r) => r.data)
 export const updateSuite = (slug, suiteId, payload) =>
@@ -103,13 +104,22 @@ export const importCasesCsv = (slug, revisionId, file) => {
 }
 
 // Test cycles
-export const listCycles = (slug) => api.get(`/${slug}/cycles`).then((r) => r.data)
+export const listCycles = (slug, includeSystemGenerated = false) =>
+  api.get(`/${slug}/cycles`, { params: { include_system_generated: includeSystemGenerated } }).then((r) => r.data)
 export const createCycle = (slug, payload) => api.post(`/${slug}/cycles`, payload).then((r) => r.data)
 export const getCycle = (slug, cycleId) => api.get(`/${slug}/cycles/${cycleId}`).then((r) => r.data)
 export const updateCycle = (slug, cycleId, payload) => api.put(`/${slug}/cycles/${cycleId}`, payload).then((r) => r.data)
 export const lockCycle = (slug, cycleId) => api.post(`/${slug}/cycles/${cycleId}/lock`).then((r) => r.data)
 export const reopenCycle = (slug, cycleId, reason) =>
   api.post(`/${slug}/cycles/${cycleId}/reopen`, { reason }).then((r) => r.data)
+export const rerunCycle = (slug, cycleId, mode, caseIds) =>
+  api.post(`/${slug}/cycles/${cycleId}/rerun`, { mode, case_ids: caseIds }).then((r) => r.data)
+
+// Quick Manual Test entry flow
+export const createQuickTest = (slug, payload) => api.post(`/${slug}/quick-test`, payload).then((r) => r.data)
+export const runSuiteNow = (slug, suiteId, revisionId, payload = {}) =>
+  api.post(`/${slug}/suites/${suiteId}/revisions/${revisionId}/run-now`, payload).then((r) => r.data)
+export const getContinueLastTest = (slug) => api.get(`/${slug}/continue-last-test`).then((r) => r.data)
 
 // Cycle test results (execution)
 export const listCycleResults = (slug, cycleId) => api.get(`/${slug}/cycles/${cycleId}/results`).then((r) => r.data)

@@ -10,8 +10,16 @@ router = APIRouter(prefix="/api/{slug}/suites", tags=["suites"], dependencies=[D
 
 
 @router.get("", response_model=list[schemas.TestSuiteOut])
-def list_suites(slug: str, db: Session = Depends(get_project_db)):
-    return db.query(models.TestSuite).order_by(models.TestSuite.created_at.desc()).all()
+def list_suites(slug: str, include_system_generated: bool = False, db: Session = Depends(get_project_db)):
+    """Quick Manual Test entry flow: the shared, auto-created "Quick
+    Tests" suite is hidden here by default (still a fully real,
+    auditable, exportable TestSuite row) -- pass
+    include_system_generated=true to show it, matching the existing
+    "Show archived" toggle pattern elsewhere in this app."""
+    q = db.query(models.TestSuite)
+    if not include_system_generated:
+        q = q.filter(models.TestSuite.is_system_generated.is_(False))
+    return q.order_by(models.TestSuite.created_at.desc()).all()
 
 
 @router.post("", response_model=schemas.TestSuiteOut)

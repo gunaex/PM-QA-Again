@@ -35,6 +35,7 @@ from .routers import (  # noqa: E402
     workflow_runs,
     recording_sessions,
     hybrid_reports,
+    quick_test,
 )
 from .seed import seed_bootstrap_admin  # noqa: E402
 from .rate_limit import limiter  # noqa: E402
@@ -160,6 +161,7 @@ app.include_router(workflows.router)
 app.include_router(workflow_runs.router)
 app.include_router(recording_sessions.router)
 app.include_router(hybrid_reports.router)
+app.include_router(quick_test.router)
 
 
 @app.get("/api/health")

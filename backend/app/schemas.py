@@ -84,6 +84,7 @@ class TestSuiteOut(BaseModel):
     created_by: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+    is_system_generated: bool = False
 
     class Config:
         from_attributes = True
@@ -357,9 +358,40 @@ class TestCycleOut(BaseModel):
     locked_at: Optional[datetime] = None
     locked_by: Optional[str] = None
     result_counts: Optional[ResultCounts] = None
+    is_system_generated: bool = False
 
     class Config:
         from_attributes = True
+
+
+# ---------- Quick Manual Test entry flow ----------
+
+
+class QuickTestCreate(BaseModel):
+    title: str
+    expected_result_md: Optional[str] = None
+    environment: Optional[str] = None
+    require_evidence_for_pass: bool = True
+
+
+class QuickTestOut(BaseModel):
+    cycle: TestCycleOut
+    result_id: int
+
+
+class RunNowRequest(BaseModel):
+    environment: Optional[str] = None
+    require_evidence_for_pass: bool = True
+
+
+class RerunCycleRequest(BaseModel):
+    mode: str  # "all" | "fail_blocked" | "selected"
+    case_ids: Optional[list[int]] = None
+
+
+class ContinueLastTestOut(BaseModel):
+    cycle_id: int
+    result_id: int
 
 
 class CycleTestResultUpdate(BaseModel):

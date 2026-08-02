@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { NavLink, useNavigate, useParams } from 'react-router-dom'
-import { getSuite, listRevisions, createRevision } from '../api/client'
+import { getSuite, listRevisions, createRevision, runSuiteNow } from '../api/client'
 import { useAuth } from '../auth/AuthContext.jsx'
 import StatusBadge from '../components/StatusBadge.jsx'
 
@@ -17,6 +17,7 @@ export default function SuiteDetail() {
   const [label, setLabel] = useState('')
   const [summary, setSummary] = useState('')
   const [creating, setCreating] = useState(false)
+  const [runningNow, setRunningNow] = useState(null)
 
   const load = () => {
     setLoading(true)
@@ -45,6 +46,19 @@ export default function SuiteDetail() {
       setLoadError(err.response?.data?.detail || 'Could not create revision')
     } finally {
       setCreating(false)
+    }
+  }
+
+  const handleRunNow = async (revisionId) => {
+    setRunningNow(revisionId)
+    setLoadError(null)
+    try {
+      const cycle = await runSuiteNow(slug, suiteId, revisionId)
+      navigate(`/${slug}/cycles/${cycle.id}`)
+    } catch (err) {
+      setLoadError(err.response?.data?.detail || 'Could not run this suite')
+    } finally {
+      setRunningNow(null)
     }
   }
 
@@ -104,20 +118,25 @@ export default function SuiteDetail() {
       ) : (
         <div className="bg-white border border-gray-200 rounded-lg divide-y divide-gray-100">
           {revisions.map((r) => (
-            <button
-              key={r.id}
-              onClick={() => navigate(`/${slug}/suites/${suiteId}/revisions/${r.id}`)}
-              className="w-full flex items-center justify-between gap-4 px-5 py-3 text-left hover:bg-gray-50"
-            >
-              <div>
+            <div key={r.id} className="w-full flex items-center justify-between gap-4 px-5 py-3 hover:bg-gray-50">
+              <button onClick={() => navigate(`/${slug}/suites/${suiteId}/revisions/${r.id}`)} className="text-left flex-1 min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="font-medium text-gray-900">{r.revision_label}</span>
                   <StatusBadge status={r.status} />
                 </div>
                 {r.change_summary && <p className="text-xs text-gray-500 mt-0.5">{r.change_summary}</p>}
-              </div>
+              </button>
               <span className="text-xs text-gray-400 shrink-0">{new Date(r.created_at).toLocaleDateString()}</span>
-            </button>
+              {canEdit && r.status === 'PUBLISHED' && (
+                <button
+                  onClick={() => handleRunNow(r.id)}
+                  disabled={runningNow === r.id}
+                  className="shrink-0 px-3 py-1.5 text-xs bg-emerald-600 text-white rounded-md hover:bg-emerald-700 disabled:opacity-50"
+                >
+                  {runningNow === r.id ? 'Starting…' : 'Run now'}
+                </button>
+              )}
+            </div>
           ))}
         </div>
       )}

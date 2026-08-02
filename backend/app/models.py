@@ -78,6 +78,12 @@ class TestSuite(ProjectBase):
     created_by = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    # Quick Manual Test entry flow: the one shared "Quick Tests" suite a
+    # project auto-creates on first use is flagged so the formal Suite
+    # list hides it by default (toggle to show) -- it is still a fully
+    # real TestSuite row, fully auditable/exportable, never a parallel
+    # ad-hoc model.
+    is_system_generated = Column(Boolean, default=False)
 
 
 class ScriptRevision(ProjectBase):
@@ -179,6 +185,12 @@ class TestCycle(ProjectBase):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     locked_at = Column(DateTime, nullable=True)
     locked_by = Column(String, nullable=True)
+    # Quick Manual Test entry flow -- denormalized copy of the owning
+    # suite's own is_system_generated flag at creation time (a rerun
+    # inherits its source cycle's own value, so a rerun of a formal
+    # cycle stays visible and a rerun of a quick test stays hidden).
+    # Avoids a join on the hot cycle-list query.
+    is_system_generated = Column(Boolean, default=False)
 
 
 class CycleTestResult(ProjectBase):

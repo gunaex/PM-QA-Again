@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from .. import models, schemas
 from ..database import get_project_db
 from ..auth import get_current_user, require_tester, require_admin
+from .cycles import create_cycle_with_snapshot, most_recently_used_environment, _to_out as _cycle_to_out
 
 router = APIRouter(
     prefix="/api/{slug}/suites/{suite_id}/revisions", tags=["revisions"], dependencies=[Depends(get_current_user)]
@@ -184,3 +185,41 @@ def clone_revision(
     db.commit()
     db.refresh(clone)
     return clone
+
+
+@router.post("/{revision_id}/run-now", response_model=schemas.TestCycleOut)
+def run_now(
+    slug: str,
+    suite_id: int,
+    revision_id: int,
+    payload: schemas.RunNowRequest,
+    db: Session = Depends(get_project_db),
+    user: models.User = Depends(require_tester),
+):
+    """One click, from a published suite revision straight to an active
+    cycle — no separate navigation to Test Cycles required. Generates a
+    sensible cycle name (suite + timestamp) and defaults to the most
+    recently used environment project-wide."""
+    suite = _get_suite(db, suite_id)
+    revision = (
+        db.query(models.ScriptRevision)
+        .filter(models.ScriptRevision.id == revision_id, models.ScriptRevision.suite_id == suite_id)
+        .first()
+    )
+    if not revision:
+        raise HTTPException(status_code=404, detail="Revision not found")
+    if revision.status != "PUBLISHED":
+        raise HTTPException(status_code=400, detail=f"Run Now requires a PUBLISHED revision (current status: {revision.status})")
+
+    timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    environment = payload.environment or most_recently_used_environment(db)
+    cycle = create_cycle_with_snapshot(
+        db, user.email,
+        suite_id=suite_id, script_revision_id=revision_id,
+        name=f"{suite.name} — {timestamp}",
+        environment=environment,
+        require_evidence_for_pass=payload.require_evidence_for_pass,
+    )
+    db.commit()
+    db.refresh(cycle)
+    return _cycle_to_out(db, cycle)

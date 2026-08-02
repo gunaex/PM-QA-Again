@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { NavLink, useParams } from 'react-router-dom'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { NavLink, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   getCycle,
   listCycleResults,
@@ -9,6 +9,7 @@ import {
   getCycleResultHistory,
   lockCycle,
   reopenCycle,
+  rerunCycle,
 } from '../api/client'
 import { useAuth } from '../auth/AuthContext.jsx'
 import StatusBadge from '../components/StatusBadge.jsx'
@@ -21,8 +22,11 @@ export default function CycleExecution() {
   const { user } = useAuth()
   const canEdit = user?.role === 'ADMIN' || user?.role === 'TESTER'
   const isAdmin = user?.role === 'ADMIN'
+  const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
 
   const [cycle, setCycle] = useState(null)
+  const [rerunning, setRerunning] = useState(false)
   // Lightweight list (no case action/expected/setup/validation markdown —
   // see docs/PERFORMANCE_FAST_PASS.md) used for the sidebar/filters.
   const [results, setResults] = useState([])
@@ -37,6 +41,7 @@ export default function CycleExecution() {
   const [saveState, setSaveState] = useState({}) // resultId -> 'idle'|'saving'|'saved'|'error'
   const [history, setHistory] = useState(null)
   const [showHistory, setShowHistory] = useState(false)
+  const [showCompletion, setShowCompletion] = useState(false)
 
   // Full result detail (adds case_action_md/expected/setup/validation),
   // fetched lazily per selection and cached for the rest of this page
@@ -52,7 +57,12 @@ export default function CycleExecution() {
       .then(([c, r]) => {
         setCycle(c)
         setResults(r)
-        setSelectedId((prev) => prev ?? r[0]?.id ?? null)
+        // Deep-link support (Continue Last Test / Quick Manual Test /
+        // Save & Next): a ?resultId= in the URL selects that exact case
+        // instead of always defaulting to the first one.
+        const requestedId = Number(searchParams.get('resultId'))
+        const requested = requestedId && r.some((x) => x.id === requestedId) ? requestedId : null
+        setSelectedId((prev) => prev ?? requested ?? r[0]?.id ?? null)
       })
       .catch(() => setError('Could not reach the backend.'))
       .finally(() => setLoading(false))
@@ -103,10 +113,12 @@ export default function CycleExecution() {
     setShowHistory(false)
     setHistory(null)
     setError(null)
+    setShowCompletion(false)
+    setSearchParams({})
   }
 
   const submitStatus = async (status) => {
-    if (!selected) return
+    if (!selected) return false
     const payload = {
       status,
       actual_result_md: draft.actual_result_md ?? selected.actual_result_md ?? '',
@@ -124,10 +136,38 @@ export default function CycleExecution() {
       setSaveState((prev) => ({ ...prev, [selected.id]: 'saved' }))
       const refreshedCycle = await getCycle(slug, cycleId)
       setCycle(refreshedCycle)
+      return true
     } catch (err) {
       setSaveState((prev) => ({ ...prev, [selected.id]: 'error' }))
       setError(err.response?.data?.detail || 'Could not save result')
+      return false
     }
+  }
+
+  const goToNextCase = useCallback(() => {
+    setResults((currentResults) => {
+      const idx = currentResults.findIndex((r) => r.id === selectedId)
+      const next = currentResults[idx + 1]
+      if (next) {
+        setSelectedId(next.id)
+        setShowHistory(false)
+        setHistory(null)
+        setError(null)
+        setShowCompletion(false)
+      } else {
+        setShowCompletion(true)
+      }
+      return currentResults
+    })
+  }, [selectedId])
+
+  // "Save & Next": persists whatever's in the draft (actual result /
+  // blocked / N-A reason) against the CURRENT status without requiring
+  // a fresh PASS/FAIL/BLOCKED/N-A click first, then advances to the
+  // next case — the common "I already marked this, just move on" path.
+  const handleSaveAndNext = async () => {
+    const ok = await submitStatus(selected.status)
+    if (ok) goToNextCase()
   }
 
   const handleReview = async (reviewStatus) => {
@@ -159,6 +199,34 @@ export default function CycleExecution() {
     setCycle(updated)
   }
 
+  const handleRerun = async (mode) => {
+    const label = mode === 'all' ? 'the entire cycle' : 'FAIL/BLOCKED cases only'
+    if (!window.confirm(`Rerun ${label}? This creates a brand-new cycle — this cycle is never changed.`)) return
+    try {
+      const newCycle = await rerunCycle(slug, cycleId, mode)
+      navigate(`/${slug}/cycles/${newCycle.id}`)
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Could not rerun this cycle')
+    }
+  }
+
+  // Keyboard shortcuts (Alt+key, so ordinary typing in the Actual
+  // Result / Blocked / N-A fields is never accidentally intercepted):
+  // Alt+P/F/B/A for PASS/FAIL/BLOCKED/N-A, Alt+Enter for Save & Next.
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      if (!e.altKey || !canEdit || isLocked || !selected) return
+      const key = e.key.toLowerCase()
+      if (key === 'p') { e.preventDefault(); submitStatus('PASS') }
+      else if (key === 'f') { e.preventDefault(); submitStatus('FAIL') }
+      else if (key === 'b') { e.preventDefault(); submitStatus('BLOCKED') }
+      else if (key === 'a') { e.preventDefault(); submitStatus('NOT_APPLICABLE') }
+      else if (key === 'enter') { e.preventDefault(); handleSaveAndNext() }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  })
+
   if (loading) return <p className="text-gray-500 text-sm">Loading…</p>
   if (error && !cycle)
     return (
@@ -182,16 +250,28 @@ export default function CycleExecution() {
           <h2 className="text-xl font-semibold text-gray-900">{cycle.name}</h2>
           <StatusBadge status={cycle.status} />
           <span className="text-xs text-gray-500">{cycle.environment}</span>
-          {isAdmin && cycle.status !== 'LOCKED' && (
-            <button onClick={handleLock} className="ml-auto text-xs border border-gray-300 rounded-md px-2 py-1 hover:bg-gray-50">
-              Lock Cycle
-            </button>
-          )}
-          {isAdmin && cycle.status === 'LOCKED' && (
-            <button onClick={handleReopen} className="ml-auto text-xs border border-gray-300 rounded-md px-2 py-1 hover:bg-gray-50">
-              Reopen (admin)
-            </button>
-          )}
+          <div className="ml-auto flex gap-2">
+            {canEdit && (
+              <>
+                <button onClick={() => handleRerun('all')} className="text-xs border border-gray-300 rounded-md px-2 py-1 hover:bg-gray-50">
+                  Rerun entire cycle
+                </button>
+                <button onClick={() => handleRerun('fail_blocked')} className="text-xs border border-gray-300 rounded-md px-2 py-1 hover:bg-gray-50">
+                  Rerun FAIL/BLOCKED only
+                </button>
+              </>
+            )}
+            {isAdmin && cycle.status !== 'LOCKED' && (
+              <button onClick={handleLock} className="text-xs border border-gray-300 rounded-md px-2 py-1 hover:bg-gray-50">
+                Lock Cycle
+              </button>
+            )}
+            {isAdmin && cycle.status === 'LOCKED' && (
+              <button onClick={handleReopen} className="text-xs border border-gray-300 rounded-md px-2 py-1 hover:bg-gray-50">
+                Reopen (admin)
+              </button>
+            )}
+          </div>
         </div>
         {isLocked && (
           <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2 mt-2">
@@ -234,8 +314,25 @@ export default function CycleExecution() {
           </div>
         </div>
 
+        {/* Completion summary -- shown after Save & Next moves past the last case */}
+        {showCompletion && (
+          <div className="bg-white border border-emerald-200 rounded-lg p-6 text-center space-y-3">
+            <p className="text-lg font-semibold text-gray-900">All cases reached 🎉</p>
+            <div className="flex justify-center gap-4 text-sm">
+              {['PASS', 'FAIL', 'BLOCKED', 'NOT_APPLICABLE', 'NOT_RUN'].map((s) => (
+                <span key={s} className="text-gray-600">
+                  <StatusBadge status={s} /> <span className="font-semibold text-gray-900">{results.filter((r) => r.status === s).length}</span>
+                </span>
+              ))}
+            </div>
+            <button onClick={() => setShowCompletion(false)} className="text-sm text-emerald-600 hover:underline">
+              Review cases again
+            </button>
+          </div>
+        )}
+
         {/* Main panel */}
-        {selected && (
+        {selected && !showCompletion && (
           <div className="bg-white border border-gray-200 rounded-lg p-5 space-y-4">
             <div>
               <div className="flex items-center gap-2 flex-wrap">
@@ -343,26 +440,37 @@ export default function CycleExecution() {
                 <button
                   onClick={() => submitStatus('PASS')}
                   className="px-3 py-1.5 text-sm bg-green-600 text-white rounded-md hover:bg-green-700"
+                  title="Alt+P"
                 >
                   PASS
                 </button>
                 <button
                   onClick={() => submitStatus('FAIL')}
                   className="px-3 py-1.5 text-sm bg-red-600 text-white rounded-md hover:bg-red-700"
+                  title="Alt+F"
                 >
                   NG
                 </button>
                 <button
                   onClick={() => submitStatus('BLOCKED')}
                   className="px-3 py-1.5 text-sm bg-amber-500 text-white rounded-md hover:bg-amber-600"
+                  title="Alt+B"
                 >
                   BLOCKED
                 </button>
                 <button
                   onClick={() => submitStatus('NOT_APPLICABLE')}
                   className="px-3 py-1.5 text-sm border border-gray-300 rounded-md hover:bg-gray-50"
+                  title="Alt+A"
                 >
                   N/A
+                </button>
+                <button
+                  onClick={handleSaveAndNext}
+                  className="px-3 py-1.5 text-sm bg-gray-800 text-white rounded-md hover:bg-gray-900"
+                  title="Alt+Enter"
+                >
+                  Save &amp; Next
                 </button>
                 {saveLabel && (
                   <span className={`text-xs ${saveState[selectedId] === 'error' ? 'text-red-600' : 'text-gray-500'}`}>

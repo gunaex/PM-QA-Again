@@ -67,6 +67,14 @@ PROJECT_COLUMN_PATCHES: dict[str, dict[str, str]] = {
     "recording_sessions": {
         "extension_authorization_id": "INTEGER",
     },
+    # Quick Manual Test entry flow: hide-by-default flag on existing
+    # test_suites/test_cycles rows.
+    "test_suites": {
+        "is_system_generated": "BOOLEAN DEFAULT 0",
+    },
+    "test_cycles": {
+        "is_system_generated": "BOOLEAN DEFAULT 0",
+    },
     "defects": {
         "workflow_run_id": "INTEGER",
         "workflow_step_run_id": "INTEGER",
