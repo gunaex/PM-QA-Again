@@ -16,6 +16,7 @@ import {
   saveRecordingAsDraft,
 } from '../api/client'
 import StatusBadge from './StatusBadge.jsx'
+import { describeStep } from '../utils/describeStep.js'
 
 const ACTIVE_STATUSES = new Set(['REQUESTED', 'CLAIMED', 'RECORDING', 'PAUSED'])
 
@@ -251,15 +252,10 @@ export default function RecordingPanel({ slug, workflowId, canEdit, onDraftSaved
               <li key={s.id} className={`text-xs border rounded px-2 py-1.5 ${s.needs_review ? 'border-amber-300 bg-amber-50' : 'border-gray-100'}`}>
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="font-mono text-gray-400 w-5">{i + 1}</span>
-                  <span className="px-1.5 py-0.5 rounded bg-gray-100 font-medium">{s.step_type}</span>
-                  {s.locator_value && (
-                    <span className="text-gray-500">
-                      {s.locator_strategy}={s.locator_value}
-                    </span>
-                  )}
+                  <span>
+                    {describeStep(s).icon} {describeStep(s).text}
+                  </span>
                   {s.is_sensitive && <span className="px-1 rounded bg-purple-100 text-purple-700">sensitive</span>}
-                  {s.input_value && <span className="text-gray-500">value: {s.input_value}</span>}
-                  {s.checkpoint_instructions && <span className="text-amber-700">{s.checkpoint_instructions}</span>}
                   {s.needs_review && <span className="text-amber-700 font-medium">needs review</span>}
                   <span className="ml-auto flex gap-1">
                     {canTestLocator && s.locator_value && (
@@ -282,6 +278,16 @@ export default function RecordingPanel({ slug, workflowId, canEdit, onDraftSaved
                     )}
                   </span>
                 </div>
+                {(s.locator_value || s.input_value) && (
+                  <p className="text-gray-400 mt-0.5">
+                    {s.locator_value && (
+                      <>
+                        {s.step_type} {s.locator_strategy}={s.locator_value}
+                      </>
+                    )}
+                    {s.input_value && !s.is_sensitive && <> — value: {s.input_value}</>}
+                  </p>
+                )}
                 {s.locator_warnings_json && (
                   <p className="text-amber-700 mt-1">⚠ {JSON.parse(s.locator_warnings_json).join('; ')}</p>
                 )}

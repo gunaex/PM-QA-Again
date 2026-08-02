@@ -26,6 +26,7 @@ import { useAuth } from '../auth/AuthContext.jsx'
 import StatusBadge from '../components/StatusBadge.jsx'
 import RecordingPanel from '../components/RecordingPanel.jsx'
 import CheckpointPanel from '../components/CheckpointPanel.jsx'
+import { describeStep, STEP_RUN_ICON } from '../utils/describeStep.js'
 
 const STEP_TYPES = [
   'NAVIGATE', 'CLICK', 'FILL', 'SELECT', 'CHECK', 'UNCHECK', 'PRESS_KEY',
@@ -35,6 +36,54 @@ const LOCATOR_STRATEGIES = ['TEST_ID', 'ROLE', 'LABEL', 'PLACEHOLDER', 'TEXT', '
 const LOCATOR_TYPES = new Set(['CLICK', 'FILL', 'SELECT', 'CHECK', 'UNCHECK', 'PRESS_KEY', 'WAIT_FOR_ELEMENT', 'ASSERT_VISIBLE'])
 
 const emptyStepForm = { step_type: 'CLICK', locator_strategy: 'ROLE', locator_value: '', input_value: '', expected_value: '', is_sensitive: false, checkpoint_instructions: '' }
+
+// Raw runner/human event log -- useful for debugging a failure in
+// detail, not for a first glance at "did it work" (that's
+// RunResultBanner + the per-step icons above). Hidden by default,
+// matching the "Show Developer Data" pattern already used on the
+// redesigned Reports page (components/reports/ReportVisuals.jsx).
+function DeveloperDataEvents({ events }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div>
+      <button onClick={() => setOpen((o) => !o)} className="text-xs text-gray-400 hover:text-gray-600 underline decoration-dotted">
+        {open ? 'Hide Developer Data (event log)' : 'Show Developer Data (event log)'}
+      </button>
+      {open && (
+        <ul className="mt-2 space-y-0.5 max-h-40 overflow-y-auto bg-gray-50 border border-gray-200 rounded-md p-2">
+          {events.map((ev) => (
+            <li key={ev.id} className="text-xs text-gray-500">
+              <span className="font-mono">{ev.actor_type}</span> — {ev.event_type}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+// A single big "did it work" banner instead of making the tester parse
+// a WorkflowRun status string -- the plain-language result described
+// this whole feature was asked for.
+function RunResultBanner({ status }) {
+  const RUN_BANNER = {
+    PASSED: { icon: '✅', label: 'PASSED', tone: 'bg-green-50 border-green-200 text-green-800' },
+    FAILED: { icon: '❌', label: 'FAILED', tone: 'bg-red-50 border-red-200 text-red-800' },
+    RUNNER_LOST: { icon: '❌', label: 'FAILED (runner lost)', tone: 'bg-red-50 border-red-200 text-red-800' },
+    SYSTEM_ERROR: { icon: '❌', label: 'FAILED (system error)', tone: 'bg-red-50 border-red-200 text-red-800' },
+    BLOCKED: { icon: '🚫', label: 'BLOCKED', tone: 'bg-red-50 border-red-200 text-red-800' },
+    NOT_APPLICABLE: { icon: '➖', label: 'NOT APPLICABLE', tone: 'bg-gray-50 border-gray-200 text-gray-600' },
+    CANCELLED: { icon: '⏹️', label: 'CANCELLED', tone: 'bg-gray-50 border-gray-200 text-gray-600' },
+    WAITING_FOR_HUMAN: { icon: '✋', label: 'WAITING FOR YOU', tone: 'bg-amber-50 border-amber-200 text-amber-800' },
+    RESUMING: { icon: '✋', label: 'WAITING FOR YOU', tone: 'bg-amber-50 border-amber-200 text-amber-800' },
+  }
+  const entry = RUN_BANNER[status] || { icon: '⏳', label: 'RUNNING', tone: 'bg-blue-50 border-blue-200 text-blue-800' }
+  return (
+    <div className={`flex items-center gap-2 px-3 py-2 rounded-md border font-semibold text-sm ${entry.tone}`}>
+      <span className="text-lg">{entry.icon}</span> {entry.label}
+    </div>
+  )
+}
 
 export default function WorkflowDetail() {
   const { slug, workflowId } = useParams()
@@ -319,10 +368,9 @@ export default function WorkflowDetail() {
                 {steps.map((s, i) => (
                   <li key={s.id} className="flex items-center gap-2 text-xs border border-gray-100 rounded px-2 py-1.5">
                     <span className="font-mono text-gray-400 w-5">{i + 1}</span>
-                    <span className="px-1.5 py-0.5 rounded bg-gray-100 font-medium">{s.step_type}</span>
-                    {s.locator_value && <span className="text-gray-500">{s.locator_strategy}={s.locator_value}</span>}
-                    {s.input_value && <span className="text-gray-500">value: {s.is_sensitive ? s.input_value : s.input_value}</span>}
-                    {s.checkpoint_instructions && <span className="text-amber-700">checkpoint: {s.checkpoint_instructions}</span>}
+                    <span title={`${s.step_type}${s.locator_value ? ` ${s.locator_strategy}=${s.locator_value}` : ''}`}>
+                      {describeStep(s).icon} {describeStep(s).text}
+                    </span>
                     {isDraft && canEdit && (
                       <span className="ml-auto flex gap-1">
                         <button onClick={() => moveStep(i, -1)} disabled={i === 0} className="px-1 border rounded disabled:opacity-30">
@@ -528,10 +576,11 @@ export default function WorkflowDetail() {
                       {expandedRunId === r.id && expandedRunDetail && (
                         <div className="px-3 pb-3 pt-1 border-t border-gray-50 space-y-2">
                           <div className="flex items-center gap-2">
+                            <RunResultBanner status={expandedRunDetail.status} />
                             {![
                               'PASSED', 'FAILED', 'BLOCKED', 'NOT_APPLICABLE', 'CANCELLED', 'RUNNER_LOST', 'SYSTEM_ERROR',
                             ].includes(expandedRunDetail.status) && (
-                              <button onClick={() => handleCancelRun(r.id)} className="text-xs text-red-600 hover:underline">
+                              <button onClick={() => handleCancelRun(r.id)} className="text-xs text-red-600 hover:underline ml-auto">
                                 Cancel
                               </button>
                             )}
@@ -552,7 +601,7 @@ export default function WorkflowDetail() {
                             )
                           })()}
                           <div>
-                            <p className="text-[10px] font-medium text-gray-400 uppercase mb-1">Step Runs</p>
+                            <p className="text-[10px] font-medium text-gray-400 uppercase mb-1">Steps</p>
                             {expandedRunDetail.step_runs.length === 0 ? (
                               <p className="text-xs text-gray-400">No steps executed yet.</p>
                             ) : (
@@ -560,8 +609,8 @@ export default function WorkflowDetail() {
                                 {expandedRunDetail.step_runs.map((sr) => (
                                   <li key={sr.id} className="text-xs flex items-center gap-2">
                                     <span className="font-mono text-gray-400 w-5">{sr.sequence_no}</span>
-                                    <span className="px-1 rounded bg-gray-100">{sr.step_type}</span>
-                                    <StatusBadge status={sr.status} />
+                                    <span>{STEP_RUN_ICON[sr.status] || '⚪'}</span>
+                                    <span title={sr.step_type}>{describeStep(sr).text}</span>
                                     {sr.failure_category && <span className="text-red-600">{sr.failure_category}</span>}
                                     {sr.machine_message && <span className="text-gray-500 truncate max-w-xs">{sr.machine_message}</span>}
                                   </li>
@@ -569,16 +618,7 @@ export default function WorkflowDetail() {
                               </ul>
                             )}
                           </div>
-                          <div>
-                            <p className="text-[10px] font-medium text-gray-400 uppercase mb-1">Events</p>
-                            <ul className="space-y-0.5 max-h-40 overflow-y-auto">
-                              {expandedRunDetail.events.map((ev) => (
-                                <li key={ev.id} className="text-xs text-gray-500">
-                                  <span className="font-mono">{ev.actor_type}</span> — {ev.event_type}
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
+                          <DeveloperDataEvents events={expandedRunDetail.events} />
                         </div>
                       )}
                     </li>

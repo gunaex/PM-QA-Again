@@ -178,6 +178,41 @@ def test_hyb2_full_job_protocol(auth_client, project_slug):
     assert post_complete_hb.json()["status"] == "PASSED"
 
 
+def test_step_run_detail_carries_step_fields_for_plain_language_display(auth_client, project_slug):
+    """WorkflowStepRunOut flattens locator/input/expected/checkpoint
+    fields from the WorkflowStep it executed -- without this, the
+    frontend's describeStep() can only render a generic "an element"
+    for a run's step list instead of the same specific wording ("Type
+    into \"Email\"") shown while authoring/reviewing the workflow."""
+    slug = project_slug
+    wf = auth_client.post(f"/api/{slug}/workflows", json={"name": "field-carry wf"}).json()
+    rev = auth_client.post(f"/api/{slug}/workflows/{wf['id']}/revisions", json={"revision_label": "v1"}).json()
+    step = auth_client.post(
+        f"/api/{slug}/workflows/{wf['id']}/revisions/{rev['id']}/steps",
+        json={"step_type": "FILL", "locator_strategy": "LABEL", "locator_value": "Email", "input_value": "someone@example.com"},
+    ).json()
+    auth_client.post(f"/api/{slug}/workflows/{wf['id']}/revisions/{rev['id']}/publish")
+
+    queued = auth_client.post(f"/api/{slug}/workflow-runs", json={"workflow_revision_id": rev["id"]}).json()
+    run_id = queued["id"]
+
+    token = _issue_runner_token(auth_client, "field-carry-runner")
+    runner = _fresh_client()
+    runner.headers.update({"X-Runner-Token": token})
+    claim = runner.post(f"/api/{slug}/workflow-runs/claim").json()
+    lease_token = claim["lease_token"]
+
+    sr = runner.post(f"/api/{slug}/workflow-runs/{run_id}/step-runs", json={"workflow_step_id": step["id"], "lease_token": lease_token}).json()
+    runner.put(f"/api/{slug}/workflow-runs/{run_id}/step-runs/{sr['id']}", json={"status": "PASSED", "lease_token": lease_token})
+
+    detail = auth_client.get(f"/api/{slug}/workflow-runs/{run_id}").json()
+    step_run = detail["step_runs"][0]
+    assert step_run["step_type"] == "FILL"
+    assert step_run["locator_strategy"] == "LABEL"
+    assert step_run["locator_value"] == "Email"
+    assert step_run["input_value"] == "someone@example.com"
+
+
 def test_hyb2_lease_expiry_marks_runner_lost(auth_client, project_slug, monkeypatch):
     slug = project_slug
     _, revision_id, _ = _make_published_workflow(auth_client, slug, n_steps=1)

@@ -810,9 +810,18 @@ class WorkflowStepRunOut(BaseModel):
     started_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
     created_at: datetime
-    # Flattened.
+    # Flattened from the WorkflowStep this run executed -- lets the
+    # frontend's plain-language describeStep() render the exact same
+    # sentence here as in the step-authoring list (e.g. "Type into
+    # \"Email\"" instead of a generic "Type into an element"), since a
+    # step-run's own row never carries these itself.
     step_type: Optional[str] = None
     step_description: Optional[str] = None
+    locator_strategy: Optional[str] = None
+    locator_value: Optional[str] = None
+    input_value: Optional[str] = None
+    expected_value: Optional[str] = None
+    checkpoint_instructions: Optional[str] = None
 
     class Config:
         from_attributes = True

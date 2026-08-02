@@ -196,6 +196,15 @@ def _build_run_detail(db: Session, run: models.WorkflowRun) -> schemas.WorkflowR
         if step:
             item.step_type = step.step_type
             item.step_description = step.description
+            item.locator_strategy = step.locator_strategy
+            item.locator_value = step.locator_value
+            # input_value on a sensitive step is always a ${VAR} placeholder,
+            # never the real secret (enforced at write time) -- exposing it
+            # here is no different from the step-authoring list already
+            # showing it unconditionally.
+            item.input_value = step.input_value
+            item.expected_value = step.expected_value
+            item.checkpoint_instructions = step.checkpoint_instructions
         step_run_outs.append(item)
 
     events = (

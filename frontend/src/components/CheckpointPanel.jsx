@@ -10,6 +10,7 @@ import {
 import { useAuth } from '../auth/AuthContext.jsx'
 import StatusBadge from './StatusBadge.jsx'
 import EvidenceGallery from './EvidenceGallery.jsx'
+import { describeStep, STEP_RUN_ICON } from '../utils/describeStep.js'
 
 const DECISION_STATUSES = ['PASS', 'FAIL', 'BLOCKED', 'NOT_APPLICABLE']
 
@@ -181,8 +182,8 @@ export default function CheckpointPanel({ slug, runId, workflowStepId, run, canE
             {ctx.run.step_runs.map((sr) => (
               <li key={sr.id} className="text-xs flex items-center gap-2">
                 <span className="font-mono text-gray-400 w-5">{sr.sequence_no}</span>
-                <span className="px-1 rounded bg-gray-100">{sr.step_type}</span>
-                <StatusBadge status={sr.status} />
+                <span>{STEP_RUN_ICON[sr.status] || '⚪'}</span>
+                <span title={sr.step_type}>{describeStep(sr).text}</span>
                 {sr.machine_message && <span className="text-gray-500 truncate max-w-xs">{sr.machine_message}</span>}
               </li>
             ))}
