@@ -920,6 +920,10 @@ class WorkflowRunCompleteRequest(BaseModel):
     lease_token: str
 
 
+class WorkflowRunDispatchFailureRequest(BaseModel):
+    message: Optional[str] = None
+
+
 # ---------- HYB-3: browser workflow recorder ----------
 
 

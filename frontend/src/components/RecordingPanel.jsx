@@ -26,8 +26,6 @@ const RUN_TERMINAL_STATUSES = new Set([
   'PASSED', 'FAILED', 'BLOCKED', 'NOT_APPLICABLE', 'CANCELLED', 'RUNNER_LOST', 'SYSTEM_ERROR',
 ])
 
-const ACTIVE_STATUSES = new Set(['REQUESTED', 'CLAIMED', 'RECORDING', 'PAUSED'])
-
 // A sensitive field's real value is never captured (see content.js) --
 // the tester must supply a ${VAR_NAME} placeholder before a recording
 // with one can be saved. Guessing a sensible default from the field's
@@ -56,21 +54,17 @@ function suggestSecretName(step, fallbackIndex) {
  * launches (never this page's own browser) -- this panel is the
  * remote control: start/pause/resume/stop, live captured-step list,
  * review/edit before saving, save as DRAFT (never auto-published). */
-export default function RecordingPanel({ slug, workflowId, canEdit, onDraftSaved }) {
+export default function RecordingPanel({ slug, workflowId, canEdit, nextRevisionLabel = 'v1', onDraftSaved }) {
   const [session, setSession] = useState(null)
   const [targetUrl, setTargetUrl] = useState(`${window.location.origin}/login`)
   const [checkpointText, setCheckpointText] = useState('')
   const [waitSeconds, setWaitSeconds] = useState('2')
-  const [revisionLabel, setRevisionLabel] = useState('')
   const [error, setError] = useState(null)
   const [saving, setSaving] = useState(false)
   const [extensionToken, setExtensionToken] = useState(null)
-  // Phase E: "Test It Now" -- the just-saved DRAFT revision, and the
-  // preview run against it (if the tester clicked the button). Neither
-  // touches the ADMIN-only publish gate; a preview run is never
-  // counted in reports (see backend hybrid_metrics.py's is_preview
-  // filtering).
   const [savedRevision, setSavedRevision] = useState(null)
+  const [showConnectionHelp, setShowConnectionHelp] = useState(false)
+  const [showActionTools, setShowActionTools] = useState(false)
   const [previewRun, setPreviewRun] = useState(null)
   const [previewError, setPreviewError] = useState(null)
   // Tracks which sensitive steps we've already auto-suggested a name
@@ -113,13 +107,18 @@ export default function RecordingPanel({ slug, workflowId, canEdit, onDraftSaved
     try {
       const s = await createRecordingSession(slug, workflowId, targetUrl)
       setSession(s)
-      // A leftover pairing code from a previous session is tied to that
-      // session and would silently fail (or worse, connect the wrong
-      // session) if the tester pasted it into the extension for this
-      // new one -- always require a fresh Authorize Extension click.
-      setExtensionToken(null)
+      setSavedRevision(null)
+      setShowConnectionHelp(false)
+      try {
+        const result = await authorizeExtension(slug, s.id)
+        setExtensionToken(result.pairing_code)
+      } catch {
+        // The always-on recorder may claim the session before a browser
+        // extension is needed. Connection help remains available if not.
+        setExtensionToken(null)
+      }
     } catch (err) {
-      setError(err.response?.data?.detail || 'Could not start a recording session')
+      setError(err.response?.data?.detail || 'Could not start recording. Please try again.')
     }
   }
 
@@ -204,19 +203,15 @@ export default function RecordingPanel({ slug, workflowId, canEdit, onDraftSaved
 
   const handleSaveAsDraft = async (e) => {
     e.preventDefault()
-    if (!revisionLabel.trim()) return
     setSaving(true)
     setError(null)
     try {
-      const revision = await saveRecordingAsDraft(slug, session.id, revisionLabel.trim())
+      const revision = await saveRecordingAsDraft(slug, session.id, nextRevisionLabel)
       setSession(null)
-      setRevisionLabel('')
-      setSavedRevision(revision)
-      setPreviewRun(null)
-      setPreviewError(null)
+      setSavedRevision(null)
       onDraftSaved?.(revision)
     } catch (err) {
-      setError(err.response?.data?.detail || 'Could not save this recording as a draft')
+      setError(err.response?.data?.detail || 'Could not save this test. Please review the highlighted actions.')
     } finally {
       setSaving(false)
     }
@@ -227,13 +222,10 @@ export default function RecordingPanel({ slug, workflowId, canEdit, onDraftSaved
   if (!session) {
     return (
       <div className="space-y-3">
-        <div className="bg-white border border-gray-200 rounded-lg p-4">
-          <p className="text-xs font-medium text-gray-500 uppercase mb-2">Record a Workflow</p>
-          <p className="text-xs text-gray-500 mb-2">
-            Opens a real, separate browser window that the QA Runner controls — interact with it directly; use the
-            buttons below to pause/resume/stop remotely. A runner process must be running (<code>npm run record</code>).
-          </p>
-          <div className="flex gap-2">
+        <div className="bg-white border border-emerald-200 rounded-xl p-5 shadow-sm">
+          <p className="font-semibold text-gray-900">Record</p>
+          <p className="text-sm text-gray-500 mt-1 mb-3">Enter the page where this journey begins, then use the website as a tester normally would.</p>
+          <div className="flex flex-col sm:flex-row gap-2">
             <input
               value={targetUrl}
               onChange={(e) => setTargetUrl(e.target.value)}
@@ -241,7 +233,7 @@ export default function RecordingPanel({ slug, workflowId, canEdit, onDraftSaved
               className="flex-1 px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
             />
             <button onClick={handleStart} className="px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-md hover:bg-emerald-700">
-              Start Recording
+              ● Record
             </button>
           </div>
           {error && <p className="text-xs text-red-600 mt-2">{error}</p>}
@@ -294,16 +286,13 @@ export default function RecordingPanel({ slug, workflowId, canEdit, onDraftSaved
   const isRecording = session.status === 'RECORDING'
   const isPaused = session.status === 'PAUSED'
   const isStopped = session.status === 'STOPPED'
-  const canTestLocator = isRecording || isPaused
+  const canTestLocator = (isRecording || isPaused) && showActionTools
 
   return (
     <div className="bg-white border border-emerald-300 rounded-lg p-4 space-y-3">
       <div className="flex items-center gap-2 flex-wrap">
-        <p className="text-xs font-medium text-gray-500 uppercase">Recording Session #{session.id}</p>
-        <StatusBadge status={session.status} />
-        {session.status === 'REQUESTED' && (
-          <span className="text-xs text-gray-400">waiting for a runner process (advanced mode) or the Chrome extension to connect…</span>
-        )}
+        <p className="font-semibold text-gray-900">{session.status === 'REQUESTED' ? 'Connecting recorder…' : 'Recording'}</p>
+        {session.status !== 'REQUESTED' && <StatusBadge status={session.status} />}
         <div className="ml-auto flex gap-2">
           {isRecording && (
             <button onClick={handleUndo} className="px-2 py-1 text-xs border border-gray-300 rounded hover:bg-gray-50">
@@ -339,33 +328,31 @@ export default function RecordingPanel({ slug, workflowId, canEdit, onDraftSaved
       </div>
 
       {session.status === 'REQUESTED' && (
-        <div className="border border-dashed border-gray-200 rounded-md p-3 text-xs space-y-2">
-          <p className="text-gray-500">
-            <strong>Everyday mode:</strong> use the QA-Again Recorder Chrome extension in your own browser tab — no
-            terminal needed.
-          </p>
-          {!extensionToken ? (
-            <button onClick={handleAuthorizeExtension} className="px-3 py-1.5 border border-emerald-300 text-emerald-700 rounded hover:bg-emerald-50">
-              Authorize Extension
-            </button>
-          ) : (
-            <div className="bg-gray-50 rounded p-2 space-y-1">
-              <p className="text-gray-500">
-                1. Open the tab you want to record. 2. Click the QA-Again Recorder icon. 3. Paste this code below and
-                click Start Recording. Shown once — copy it now.
-              </p>
-              <code className="block break-all bg-white border border-gray-200 rounded px-2 py-1 select-all">{extensionToken}</code>
+        <div className="bg-gray-50 border border-gray-200 rounded-md p-3 text-sm">
+          <p className="text-gray-600">Waiting for the recording window to connect.</p>
+          <button
+            onClick={() => setShowConnectionHelp((open) => !open)}
+            className="text-xs text-emerald-700 hover:underline mt-2"
+          >
+            {showConnectionHelp ? 'Hide connection help' : 'Recording window did not open?'}
+          </button>
+          {showConnectionHelp && (
+            <div className="mt-3 text-xs text-gray-600 space-y-2">
+              <p>Open the page you want to record, click the QA-Again Recorder extension, paste this connection code, then press Start.</p>
+              {extensionToken ? (
+                <code className="block break-all bg-white border border-gray-200 rounded px-2 py-1 select-all">{extensionToken}</code>
+              ) : (
+                <button onClick={handleAuthorizeExtension} className="px-3 py-1.5 border border-emerald-300 text-emerald-700 rounded hover:bg-emerald-50">
+                  Create connection code
+                </button>
+              )}
             </div>
           )}
-          <p className="text-gray-400">
-            Advanced/fallback mode (unchanged): run <code>npm run record</code> in <code>runner/</code> against this same
-            session.
-          </p>
         </div>
       )}
 
       {(isRecording || isPaused) && (
-        <div className="flex gap-2 flex-wrap">
+        <div className={showActionTools ? 'flex gap-2 flex-wrap' : 'hidden'}>
           <form onSubmit={handleInsertCheckpoint} className="flex gap-2 flex-1 min-w-[240px]">
             <input
               value={checkpointText}
@@ -396,7 +383,14 @@ export default function RecordingPanel({ slug, workflowId, canEdit, onDraftSaved
       )}
 
       <div>
-        <p className="text-[10px] font-medium text-gray-400 uppercase mb-1">Captured Steps ({steps.length})</p>
+        <div className="flex items-center justify-between gap-2 mb-2">
+          <p className="text-xs font-medium text-gray-500">Actions ({steps.length})</p>
+          {steps.length > 0 && (
+            <button onClick={() => setShowActionTools((open) => !open)} className="text-xs text-gray-400 hover:text-gray-600">
+              {showActionTools ? 'Hide action tools' : 'Action tools'}
+            </button>
+          )}
+        </div>
         {steps.length === 0 ? (
           <p className="text-xs text-gray-400">Nothing captured yet — interact with the recording browser window.</p>
         ) : (
@@ -432,7 +426,7 @@ export default function RecordingPanel({ slug, workflowId, canEdit, onDraftSaved
                   </span>
                 </div>
                 {(s.locator_value || s.input_value) && (
-                  <p className="text-gray-400 mt-0.5">
+                  <p className={showActionTools ? 'text-gray-400 mt-0.5' : 'hidden'}>
                     {s.locator_value && (
                       <>
                         {s.step_type} {s.locator_strategy}={s.locator_value}
@@ -442,14 +436,13 @@ export default function RecordingPanel({ slug, workflowId, canEdit, onDraftSaved
                   </p>
                 )}
                 {s.locator_warnings_json && (
-                  <p className="text-amber-700 mt-1">⚠ {JSON.parse(s.locator_warnings_json).join('; ')}</p>
+                  <p className="text-amber-700 mt-1">This action may need a quick review.</p>
                 )}
                 {s.locator_test_result_json && (
-                  <p className="text-gray-500 mt-1">
+                  <p className={showActionTools ? 'text-gray-500 mt-1' : 'hidden'}>
                     Locator test: {JSON.parse(s.locator_test_result_json).ok ? '✅ matched exactly 1 element' : `❌ ${JSON.parse(s.locator_test_result_json).message}`}
                   </p>
                 )}
-                {s.locator_test_requested && <p className="text-gray-400 mt-1">Testing locator…</p>}
                 {isStopped && s.is_sensitive && (
                   <div className="mt-1 flex items-center gap-1">
                     <span className="text-gray-500">Variable name:</span>
@@ -480,15 +473,15 @@ export default function RecordingPanel({ slug, workflowId, canEdit, onDraftSaved
       </div>
 
       {isStopped && (
-        <form onSubmit={handleSaveAsDraft} className="flex gap-2 border-t border-gray-100 pt-3">
+        <form onSubmit={handleSaveAsDraft} className="flex justify-end border-t border-gray-100 pt-3">
           <input
-            value={revisionLabel}
-            onChange={(e) => setRevisionLabel(e.target.value)}
+            value={nextRevisionLabel}
+            readOnly
             placeholder="Draft revision label (e.g. recorded-v1)"
-            className="flex-1 px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            className="hidden"
           />
-          <button type="submit" disabled={saving} className="px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-md hover:bg-emerald-700 disabled:opacity-50">
-            {saving ? 'Saving…' : 'Save as Draft Revision'}
+          <button type="submit" disabled={saving || steps.length === 0} className="px-5 py-2 bg-emerald-600 text-white text-sm font-medium rounded-md hover:bg-emerald-700 disabled:opacity-50">
+            {saving ? 'Saving…' : 'Save Test'}
           </button>
         </form>
       )}

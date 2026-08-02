@@ -72,8 +72,8 @@ export class WorkflowRunClient {
     return (await res.json()) as T;
   }
 
-  claim(): Promise<ClaimedRun> {
-    return this.request<ClaimedRun>("/claim", { method: "POST" });
+  claim(runId?: number): Promise<ClaimedRun> {
+    return this.request<ClaimedRun>(runId === undefined ? "/claim" : `/claim/${runId}`, { method: "POST" });
   }
 
   heartbeat(runId: number, leaseToken: string): Promise<RunDetail> {

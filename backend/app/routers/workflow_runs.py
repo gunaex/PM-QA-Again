@@ -35,6 +35,7 @@ from ..auth import get_current_user, require_tester, require_admin, get_current_
 from ..quota import quota_status
 from ..rate_limit import limiter
 from ..storage import EvidenceStorage, get_evidence_storage
+from ..execution_dispatch import ExecutionDispatchError, dispatch_workflow_run
 from .workflows import _validate_step_fields
 
 logger = logging.getLogger("workflow_runs")
@@ -131,6 +132,24 @@ def _to_run_out(db: Session, run: models.WorkflowRun) -> schemas.WorkflowRunOut:
     return out
 
 
+def _dispatch_queued_run(db: Session, slug: str, run: models.WorkflowRun) -> None:
+    """Start ephemeral cloud execution when configured.
+
+    Dispatch happens only after the QUEUED transaction is durable. A provider
+    failure is recorded honestly as SYSTEM_ERROR instead of leaving a job that
+    appears to be preparing forever.
+    """
+    try:
+        dispatch_workflow_run(slug, run.id)
+    except ExecutionDispatchError as exc:
+        run.status = "SYSTEM_ERROR"
+        run.result_summary = str(exc)
+        run.ended_at = datetime.utcnow()
+        db.commit()
+        logger.exception("Could not dispatch workflow run %s/%s", slug, run.id)
+        raise HTTPException(status_code=503, detail="Cloud test execution is temporarily unavailable. Please try again.") from exc
+
+
 # ---------- queue / list / detail (human + runner reads) ----------
 
 
@@ -162,6 +181,7 @@ def queue_run(
     _add_event(db, run.id, "RUN_QUEUED", "HUMAN")
     db.commit()
     db.refresh(run)
+    _dispatch_queued_run(db, slug, run)
     return _to_run_out(db, run)
 
 
@@ -221,6 +241,7 @@ def preview_run(
     _add_event(db, run.id, "RUN_QUEUED", "HUMAN")
     db.commit()
     db.refresh(run)
+    _dispatch_queued_run(db, slug, run)
     return _to_run_out(db, run)
 
 
@@ -309,25 +330,37 @@ def cancel_run(slug: str, run_id: int, db: Session = Depends(get_project_db), us
     return _to_run_out(db, run)
 
 
+@router.post("/{run_id}/dispatch-failed", response_model=schemas.WorkflowRunOut)
+def report_dispatched_job_failure(
+    slug: str,
+    run_id: int,
+    payload: schemas.WorkflowRunDispatchFailureRequest,
+    db: Session = Depends(get_project_db),
+    _runner: models.RunnerToken = Depends(get_current_runner),
+):
+    """Fail an ephemeral cloud job honestly if setup/runtime crashes.
+
+    This covers failures before Chromium is installed or before a lease can
+    be claimed, which otherwise leave a QUEUED run waiting forever.
+    """
+    run = _get_run(db, run_id)
+    if run.status in models.WORKFLOW_RUN_TERMINAL_STATUSES:
+        return _to_run_out(db, run)
+    run.status = "SYSTEM_ERROR"
+    run.result_summary = (payload.message or "The cloud browser job did not complete")[:1000]
+    run.ended_at = datetime.utcnow()
+    run.lease_token = None
+    run.lease_expires_at = None
+    _add_event(db, run.id, "RUN_COMPLETED", "SYSTEM", payload_json='{"status":"SYSTEM_ERROR","source":"cloud_dispatch"}')
+    db.commit()
+    db.refresh(run)
+    return _to_run_out(db, run)
+
+
 # ---------- runner job-claim protocol ----------
 
 
-@router.post("/claim")
-def claim_run(
-    slug: str,
-    db: Session = Depends(get_project_db),
-    runner: models.RunnerToken = Depends(get_current_runner),
-):
-    _expire_stale_leases(db)
-    run = (
-        db.query(models.WorkflowRun)
-        .filter(models.WorkflowRun.status == "QUEUED")
-        .order_by(models.WorkflowRun.created_at.asc())
-        .first()
-    )
-    if not run:
-        return {"claimed": False}
-
+def _claim_run_payload(db: Session, run: models.WorkflowRun, runner: models.RunnerToken):
     lease_token = uuid.uuid4().hex
     run.status = "CLAIMED"
     run.runner_id = runner.id
@@ -361,6 +394,40 @@ def claim_run(
         "lease_token": lease_token,
         "target_base_url": target_base_url,
     }
+
+
+@router.post("/claim")
+def claim_run(
+    slug: str,
+    db: Session = Depends(get_project_db),
+    runner: models.RunnerToken = Depends(get_current_runner),
+):
+    """Legacy/local mode: claim the oldest queued run."""
+    _expire_stale_leases(db)
+    run = (
+        db.query(models.WorkflowRun)
+        .filter(models.WorkflowRun.status == "QUEUED")
+        .order_by(models.WorkflowRun.created_at.asc())
+        .first()
+    )
+    if not run:
+        return {"claimed": False}
+    return _claim_run_payload(db, run, runner)
+
+
+@router.post("/claim/{run_id}")
+def claim_dispatched_run(
+    slug: str,
+    run_id: int,
+    db: Session = Depends(get_project_db),
+    runner: models.RunnerToken = Depends(get_current_runner),
+):
+    """On-demand mode: claim exactly the run assigned to this cloud job."""
+    _expire_stale_leases(db)
+    run = _get_run(db, run_id)
+    if run.status != "QUEUED":
+        raise HTTPException(status_code=409, detail=f"Run {run_id} is not available to claim (status: {run.status})")
+    return _claim_run_payload(db, run, runner)
 
 
 @router.post("/{run_id}/heartbeat", response_model=schemas.WorkflowRunOut)

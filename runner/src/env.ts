@@ -40,8 +40,11 @@ export function loadConfig(): RunnerConfig {
     backendBaseUrl: required("BACKEND_BASE_URL"),
     projectSlug: required("PROJECT_SLUG"),
     runnerToken: required("RUNNER_TOKEN"),
-    targetBaseUrl: required("TARGET_BASE_URL"),
-    targetEmail: required("TARGET_EMAIL"),
-    targetPassword: required("TARGET_PASSWORD"),
+    // Execution workflows normally contain an absolute NAVIGATE URL.
+    // These remain useful for the legacy spike, but cloud execution does
+    // not need fake target credentials just to start.
+    targetBaseUrl: process.env.TARGET_BASE_URL ?? "",
+    targetEmail: process.env.TARGET_EMAIL ?? "",
+    targetPassword: process.env.TARGET_PASSWORD ?? "",
   };
 }

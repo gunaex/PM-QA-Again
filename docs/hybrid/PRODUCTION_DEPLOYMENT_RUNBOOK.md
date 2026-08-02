@@ -108,6 +108,17 @@ bucket itself stays private/unattached to any domain).
 
 ## 5. Post-deploy verification
 
+### 5a. Configure on-demand browser execution
+
+Production does **not** deploy an always-on runner host. Follow
+[`docs/GITHUB_ACTIONS_EXECUTION.md`](../GITHUB_ACTIONS_EXECUTION.md) once to
+configure the GitHub Actions secrets and the backend's workflow-dispatch
+secrets. Confirm that `.github/workflows/run-browser-test.yml` exists on the
+configured production ref.
+
+Queue one short smoke workflow from the UI and confirm it moves through
+`QUEUED → CLAIMED → RUNNING → PASSED` without any local runner process.
+
 Run every item in
 [POST_DEPLOYMENT_SMOKE_TEST.md](POST_DEPLOYMENT_SMOKE_TEST.md).
 

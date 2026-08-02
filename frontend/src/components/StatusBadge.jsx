@@ -37,9 +37,10 @@ const STYLES = {
 }
 
 export default function StatusBadge({ status }) {
+  const label = status === 'QUEUED' ? 'PREPARING' : status === 'RUNNER_LOST' ? 'SESSION LOST' : status
   return (
     <span className={`px-2 py-0.5 rounded-full text-xs ${STYLES[status] || 'bg-gray-100 text-gray-600'}`}>
-      {status}
+      {label}
     </span>
   )
 }

@@ -357,14 +357,14 @@ export async function executeClaimedRun(
  * forever. */
 export async function claimAndExecuteOnce(
   config: RunnerConfig,
-  opts: { pollIntervalMs?: number; maxAttempts?: number; headless?: boolean } = {},
+  opts: { pollIntervalMs?: number; maxAttempts?: number; headless?: boolean; runId?: number } = {},
 ): Promise<ExecuteRunResult | null> {
   const client = new WorkflowRunClient(config);
   const pollIntervalMs = opts.pollIntervalMs ?? 2000;
   const maxAttempts = opts.maxAttempts ?? 15;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const claimed = await client.claim();
+    const claimed = await client.claim(opts.runId);
     if (claimed.claimed && claimed.run && claimed.steps && claimed.lease_token) {
       console.log(`[runner] claimed run ${claimed.run.id} (${claimed.steps.length} steps)`);
       return executeClaimedRun(

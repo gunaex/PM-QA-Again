@@ -3,9 +3,13 @@
 // asked for. Shared between WorkflowDetail's real-run view and
 // RecordingPanel's Phase E "Test It Now" preview-run view.
 const RUN_BANNER = {
+  QUEUED: { icon: '⏳', label: 'PREPARING BROWSER', tone: 'bg-blue-50 border-blue-200 text-blue-800' },
+  CLAIMED: { icon: '⏳', label: 'STARTING TEST', tone: 'bg-blue-50 border-blue-200 text-blue-800' },
+  STARTING: { icon: '⏳', label: 'STARTING TEST', tone: 'bg-blue-50 border-blue-200 text-blue-800' },
+  RUNNING: { icon: '▶', label: 'RUNNING', tone: 'bg-blue-50 border-blue-200 text-blue-800' },
   PASSED: { icon: '✅', label: 'PASSED', tone: 'bg-green-50 border-green-200 text-green-800' },
   FAILED: { icon: '❌', label: 'FAILED', tone: 'bg-red-50 border-red-200 text-red-800' },
-  RUNNER_LOST: { icon: '❌', label: 'FAILED (runner lost)', tone: 'bg-red-50 border-red-200 text-red-800' },
+  RUNNER_LOST: { icon: '❌', label: 'FAILED (browser session lost)', tone: 'bg-red-50 border-red-200 text-red-800' },
   SYSTEM_ERROR: { icon: '❌', label: 'FAILED (system error)', tone: 'bg-red-50 border-red-200 text-red-800' },
   BLOCKED: { icon: '🚫', label: 'BLOCKED', tone: 'bg-red-50 border-red-200 text-red-800' },
   NOT_APPLICABLE: { icon: '➖', label: 'NOT APPLICABLE', tone: 'bg-gray-50 border-gray-200 text-gray-600' },

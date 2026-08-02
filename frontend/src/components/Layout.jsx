@@ -21,9 +21,9 @@ export default function Layout() {
   }, [slug])
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 flex flex-col">
       <header className="bg-white border-b border-gray-200">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
+        <div className="w-full px-4 sm:px-6 lg:px-8 2xl:px-10 py-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
           <div className="flex items-center gap-4 min-w-0">
             <NavLink to="/" className="text-sm text-gray-500 hover:text-gray-800 shrink-0">
               &larr; Projects
@@ -44,13 +44,12 @@ export default function Layout() {
               Reports
             </NavLink>
             <NavLink to={`/${slug}/workflows`} className={tabClass}>
-              Workflows
+              Automated Tests
             </NavLink>
             <NavLink to={`/${slug}/hybrid-reports`} className={tabClass}>
               Hybrid Reports
             </NavLink>
           </nav>
-          <UserBadge />
         </div>
       </header>
       {projectLoadError && (
@@ -59,9 +58,12 @@ export default function Layout() {
           couldn't connect. Try refreshing.
         </div>
       )}
-      <main className="max-w-6xl mx-auto px-4 sm:px-6 py-6">
+      <main className="w-full flex-1 px-4 sm:px-6 lg:px-8 2xl:px-10 py-6">
         <Outlet context={{ project }} />
       </main>
+      <footer className="w-full border-t border-gray-200 bg-white px-4 sm:px-6 lg:px-8 2xl:px-10 py-4 flex justify-end">
+        <UserBadge />
+      </footer>
     </div>
   )
 }

@@ -52,6 +52,47 @@ def _issue_runner_token(auth_client, label):
     return r.json()["token"]
 
 
+def test_dispatched_runner_claims_exact_run(auth_client, project_slug):
+    slug = project_slug
+    _workflow_id, revision_id, _step_ids = _make_published_workflow(auth_client, slug, n_steps=1)
+    first = auth_client.post(f"/api/{slug}/workflow-runs", json={"workflow_revision_id": revision_id}).json()
+    second = auth_client.post(f"/api/{slug}/workflow-runs", json={"workflow_revision_id": revision_id}).json()
+
+    token = _issue_runner_token(auth_client, "targeted-cloud-runner")
+    runner = _fresh_client()
+    runner.headers.update({"X-Runner-Token": token})
+    claim = runner.post(f"/api/{slug}/workflow-runs/claim/{second['id']}")
+
+    assert claim.status_code == 200, claim.text
+    assert claim.json()["run"]["id"] == second["id"]
+    assert auth_client.get(f"/api/{slug}/workflow-runs/{first['id']}").json()["status"] == "QUEUED"
+
+    # Clean up both rows so they cannot interfere with FIFO-claim tests.
+    auth_client.post(f"/api/{slug}/workflow-runs/{first['id']}/cancel")
+    runner.post(
+        f"/api/{slug}/workflow-runs/{second['id']}/complete",
+        json={"status": "CANCELLED", "lease_token": claim.json()["lease_token"]},
+    )
+
+
+def test_cloud_job_setup_failure_does_not_leave_run_queued(auth_client, project_slug):
+    slug = project_slug
+    _workflow_id, revision_id, _step_ids = _make_published_workflow(auth_client, slug, n_steps=1)
+    queued = auth_client.post(f"/api/{slug}/workflow-runs", json={"workflow_revision_id": revision_id}).json()
+    token = _issue_runner_token(auth_client, "cloud-failure-reporter")
+    runner = _fresh_client()
+    runner.headers.update({"X-Runner-Token": token})
+
+    failed = runner.post(
+        f"/api/{slug}/workflow-runs/{queued['id']}/dispatch-failed",
+        json={"message": "Chromium installation failed"},
+    )
+
+    assert failed.status_code == 200, failed.text
+    assert failed.json()["status"] == "SYSTEM_ERROR"
+    assert failed.json()["result_summary"] == "Chromium installation failed"
+
+
 def test_hyb2_full_job_protocol(auth_client, project_slug):
     slug = project_slug
     workflow_id, revision_id, step_ids = _make_published_workflow(auth_client, slug, n_steps=2)

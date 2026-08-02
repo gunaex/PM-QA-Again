@@ -20,7 +20,7 @@ import {
   queueWorkflowRun,
   getWorkflowRun,
   cancelWorkflowRun,
-  getRunnerFleetStatus,
+  previewWorkflowRun,
 } from '../api/client'
 import { useAuth } from '../auth/AuthContext.jsx'
 import StatusBadge from '../components/StatusBadge.jsx'
@@ -98,11 +98,9 @@ export default function WorkflowDetail() {
   const [runs, setRuns] = useState([])
   const [expandedRunId, setExpandedRunId] = useState(null)
   const [expandedRunDetail, setExpandedRunDetail] = useState(null)
-  // Whether ANY runner process is currently online -- without this, a
-  // QUEUED run with nobody running `npm run execute[:watch]` just sits
-  // there forever with no visible explanation why nothing happens.
-  const [runnerOnline, setRunnerOnline] = useState(null) // null = not checked yet
   const [repeatWholeTest, setRepeatWholeTest] = useState(1)
+  const [showAdvanced, setShowAdvanced] = useState(false)
+  const [startingRun, setStartingRun] = useState(false)
 
   const selectedRevision = revisions.find((r) => r.id === selectedRevisionId) || null
   const isDraft = selectedRevision?.status === 'DRAFT'
@@ -152,13 +150,6 @@ export default function WorkflowDetail() {
   }, [slug, revisions.length])
 
   useEffect(() => {
-    const checkRunner = () => getRunnerFleetStatus().then((s) => setRunnerOnline(s.any_online)).catch(() => setRunnerOnline(null))
-    checkRunner()
-    const interval = setInterval(checkRunner, 15000)
-    return () => clearInterval(interval)
-  }, [])
-
-  useEffect(() => {
     if (!expandedRunId) {
       setExpandedRunDetail(null)
       return
@@ -178,6 +169,23 @@ export default function WorkflowDetail() {
       await queueWorkflowRun(slug, selectedRevisionId)
     }
     loadRuns()
+  }
+
+  const handleRunTest = async () => {
+    if (!selectedRevisionId || startingRun) return
+    setStartingRun(true)
+    setError(null)
+    try {
+      const run = isPublished
+        ? await queueWorkflowRun(slug, selectedRevisionId)
+        : await previewWorkflowRun(slug, selectedRevisionId)
+      setRuns((prev) => [run, ...prev.filter((item) => item.id !== run.id)])
+      setExpandedRunId(run.id)
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Could not start this test')
+    } finally {
+      setStartingRun(false)
+    }
   }
 
   const handleCancelRun = async (runId) => {
@@ -290,22 +298,107 @@ export default function WorkflowDetail() {
   return (
     <div className="space-y-4">
       <NavLink to={`/${slug}/workflows`} className="text-sm text-gray-500 hover:text-gray-800">
-        &larr; Workflows
+        &larr; Automated Tests
       </NavLink>
-      <h2 className="text-xl font-semibold text-gray-900">{workflow.name}</h2>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-semibold text-gray-900">{workflow.name}</h2>
+          <p className="text-sm text-gray-500 mt-1">Record actions. Run them again. Know whether the journey still works.</p>
+        </div>
+        <button
+          onClick={() => setShowAdvanced((open) => !open)}
+          className="text-xs text-gray-500 border border-gray-200 rounded-md px-3 py-1.5 hover:bg-white"
+        >
+          {showAdvanced ? 'Hide advanced' : 'Advanced'}
+        </button>
+      </div>
       {error && <p className="text-xs text-red-600">{error}</p>}
 
       <RecordingPanel
         slug={slug}
         workflowId={workflowId}
         canEdit={canEdit}
+        nextRevisionLabel={`v${Math.max(0, ...revisions.map((revision) => revision.revision_number_sort || 0)) + 1}`}
         onDraftSaved={(revision) => {
           setRevisions((prev) => [revision, ...prev])
           setSelectedRevisionId(revision.id)
         }}
       />
 
-      <div className="grid grid-cols-1 lg:grid-cols-[240px_1fr] gap-4">
+      {selectedRevision && (
+        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+          <div className="px-5 py-4 border-b border-gray-100 flex items-center gap-3 flex-wrap">
+            <div>
+              <h3 className="font-semibold text-gray-900">Actions</h3>
+              <p className="text-xs text-gray-500 mt-0.5">The journey QA-Again will replay in order.</p>
+            </div>
+            <span className="ml-auto text-xs text-gray-400">{steps.length} {steps.length === 1 ? 'action' : 'actions'}</span>
+            {canEdit && steps.length > 0 && (
+              <button
+                onClick={handleRunTest}
+                disabled={startingRun}
+                className="px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-md hover:bg-emerald-700 disabled:opacity-50"
+              >
+                {startingRun ? 'Starting…' : '▶ Run Test'}
+              </button>
+            )}
+          </div>
+          {steps.length === 0 ? (
+            <div className="px-5 py-10 text-center">
+              <p className="text-sm text-gray-500">No actions recorded yet.</p>
+              <p className="text-xs text-gray-400 mt-1">Press Record above and use the website like a real tester.</p>
+            </div>
+          ) : (
+            <ol className="divide-y divide-gray-100">
+              {steps.map((step, index) => (
+                <li key={step.id} className="px-5 py-3 flex items-center gap-3">
+                  <span className="w-7 h-7 shrink-0 rounded-full bg-gray-100 text-gray-500 text-xs flex items-center justify-center">{index + 1}</span>
+                  <span className="text-base" aria-hidden="true">{describeStep(step).icon}</span>
+                  <span className="text-sm text-gray-800">{describeStep(step).text}</span>
+                  {step.repeat_count > 1 && <span className="ml-auto text-xs text-gray-400">Repeat {step.repeat_count}×</span>}
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
+      )}
+
+      {runs[0] && (
+        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+          <div className="p-5 flex items-center gap-4 flex-wrap">
+            <div>
+              <p className="text-xs font-medium text-gray-500 uppercase">Latest result</p>
+              <div className="mt-2"><RunResultBanner status={runs[0].status} /></div>
+            </div>
+            <button
+              onClick={() => setExpandedRunId((current) => current === runs[0].id ? null : runs[0].id)}
+              className="ml-auto text-sm text-emerald-700 hover:underline"
+            >
+              {expandedRunId === runs[0].id ? 'Hide details' : 'View details'}
+            </button>
+          </div>
+          {expandedRunId === runs[0].id && expandedRunDetail && (
+            <div className="border-t border-gray-100 px-5 py-4">
+              {(expandedRunDetail.step_runs || []).length === 0 ? (
+                <p className="text-sm text-gray-500">The test is waiting to begin.</p>
+              ) : (
+                <ol className="space-y-2">
+                  {expandedRunDetail.step_runs.map((stepRun) => (
+                    <li key={stepRun.id} className="text-sm flex items-start gap-2">
+                      <span>{STEP_RUN_ICON[stepRun.status] || '○'}</span>
+                      <span className="text-gray-700">{describeStep(stepRun).text}</span>
+                      {stepRun.machine_message && <span className="ml-auto text-xs text-red-600">{stepRun.machine_message}</span>}
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {showAdvanced && (
+      <div className="grid grid-cols-1 lg:grid-cols-[240px_1fr] gap-4 border-t border-gray-200 pt-4">
         {/* Revision list */}
         <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
           {canEdit && (
@@ -345,12 +438,12 @@ export default function WorkflowDetail() {
               <StatusBadge status={selectedRevision.status} />
               {isAdmin && isDraft && (
                 <button onClick={handlePublish} className="ml-auto px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-md hover:bg-emerald-700">
-                  Publish
+                  Approve version
                 </button>
               )}
               {canEdit && !isDraft && (
                 <button onClick={handleClone} className="ml-auto px-3 py-1.5 text-sm border border-gray-300 rounded-md hover:bg-gray-50">
-                  Clone for correction
+                  Create editable copy
                 </button>
               )}
             </div>
@@ -543,21 +636,6 @@ export default function WorkflowDetail() {
             <div className="bg-white border border-gray-200 rounded-lg p-4">
               <div className="flex items-center gap-2 mb-2 flex-wrap">
                 <p className="text-xs font-medium text-gray-500 uppercase">Runs ({runs.length})</p>
-                {runnerOnline !== null && (
-                  <span
-                    className={`px-2 py-0.5 rounded-full text-xs flex items-center gap-1 ${
-                      runnerOnline ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-800'
-                    }`}
-                    title={
-                      runnerOnline
-                        ? 'A runner process is online -- a queued run will be picked up automatically.'
-                        : 'No runner is online -- a queued run will sit and wait until one is started (see runner/start-runner.ps1 or start-runner.bat).'
-                    }
-                  >
-                    <span className={`w-1.5 h-1.5 rounded-full ${runnerOnline ? 'bg-green-500' : 'bg-amber-500'}`} />
-                    Runner: {runnerOnline ? 'Online' : 'Offline'}
-                  </span>
-                )}
                 {isPublished && canEdit && (
                   <span className="ml-auto flex items-center gap-2">
                     <label className="flex items-center gap-1 text-xs text-gray-500">
@@ -573,19 +651,12 @@ export default function WorkflowDetail() {
                       ×
                     </label>
                     <button onClick={handleQueueRun} className="px-3 py-1.5 text-xs bg-emerald-600 text-white rounded-md hover:bg-emerald-700">
-                      Queue Run
+                      Run published version
                     </button>
                   </span>
                 )}
                 {!isPublished && <p className="ml-auto text-xs text-gray-400">Publish a revision to queue a run.</p>}
               </div>
-              {runnerOnline === false && (
-                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2 mb-2">
-                  No runner is online right now. Queuing a run is safe, but nothing will execute it until someone
-                  starts one -- run <code>runner\start-runner.ps1</code> (or <code>start-runner.bat</code>) and leave
-                  that window open.
-                </p>
-              )}
               {runs.length === 0 ? (
                 <p className="text-xs text-gray-400">No runs yet.</p>
               ) : (
@@ -666,6 +737,7 @@ export default function WorkflowDetail() {
           </div>
         )}
       </div>
+      )}
     </div>
   )
 }

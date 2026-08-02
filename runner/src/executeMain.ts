@@ -16,9 +16,18 @@ import { claimAndExecuteOnce } from "./execution/executor.js";
 const config = loadConfig();
 const headless = process.env.RUNNER_HEADLESS === "1";
 const watch = process.argv.includes("--watch");
+const dispatchedRunId = process.env.WORKFLOW_RUN_ID ? Number(process.env.WORKFLOW_RUN_ID) : undefined;
+
+if (dispatchedRunId !== undefined && (!Number.isInteger(dispatchedRunId) || dispatchedRunId < 1)) {
+  throw new Error("WORKFLOW_RUN_ID must be a positive integer when provided");
+}
 
 async function runOnce(): Promise<void> {
-  const result = await claimAndExecuteOnce(config, { headless });
+  const result = await claimAndExecuteOnce(config, {
+    headless,
+    runId: dispatchedRunId,
+    maxAttempts: dispatchedRunId ? 1 : undefined,
+  });
   if (!result) {
     console.log("[runner] nothing to execute this cycle");
     return;
@@ -28,7 +37,9 @@ async function runOnce(): Promise<void> {
   );
 }
 
-if (watch) {
+if (watch && dispatchedRunId) {
+  throw new Error("--watch cannot be combined with WORKFLOW_RUN_ID; dispatched cloud jobs are one-shot");
+} else if (watch) {
   console.log("[runner] watch mode -- claiming runs continuously until stopped (Ctrl+C to exit)");
   // eslint-disable-next-line no-constant-condition
   while (true) {
