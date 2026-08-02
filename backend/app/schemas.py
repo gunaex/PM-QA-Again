@@ -1019,11 +1019,15 @@ class InsertCheckpointRequest(BaseModel):
 
 
 class ExtensionAuthorizationOut(BaseModel):
-    """Raw token shown once, exactly like RunnerTokenOut/refresh tokens."""
+    """Raw token shown once, exactly like RunnerTokenOut/refresh tokens.
+    pairing_code bundles backend URL + slug + session id + token into one
+    base64 string so the extension popup needs a single paste instead of
+    four hand-typed fields -- same secret, same lifetime, just packaging."""
 
     id: int
     recording_session_id: int
     token: str
+    pairing_code: str
     expires_at: datetime
     hard_cap_at: datetime
 

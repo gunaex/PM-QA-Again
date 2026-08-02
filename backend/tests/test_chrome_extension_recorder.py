@@ -5,6 +5,8 @@ backend protocol it drives -- the exact same way the real extension's
 background service worker would call these endpoints: a short-lived,
 recording-session-scoped token, never a runner token, never the
 tester's own JWT."""
+import base64
+import json
 from datetime import datetime, timedelta
 
 from fastapi.testclient import TestClient
@@ -147,6 +149,37 @@ def test_extension_token_is_scoped_to_its_own_session_only(auth_client, project_
     # this whole shared session-scoped project).
     auth_client.post(f"/api/{slug}/recording-sessions/{session_id_a}/discard")
     auth_client.post(f"/api/{slug}/recording-sessions/{session_id_b}/discard")
+
+
+def test_authorize_extension_returns_a_working_pairing_code(auth_client, project_slug):
+    """The popup's one-paste path: pairing_code is base64 JSON bundling
+    exactly the four fields the Advanced manual-entry fields require,
+    and the token embedded in it is the same real, working token
+    returned alongside it (not a decoy) -- decoding it and using it to
+    connect must succeed exactly like the plain `token` field does."""
+    slug = project_slug
+    workflow_id = _make_workflow(auth_client, slug, "pairing code wf")
+    created = auth_client.post(f"/api/{slug}/recording-sessions", json={"workflow_id": workflow_id, "target_url": "http://localhost:5173/login"}).json()
+    session_id = created["id"]
+
+    auth = auth_client.post(f"/api/{slug}/recording-sessions/{session_id}/authorize-extension")
+    assert auth.status_code == 200, auth.text
+    body = auth.json()
+    assert "pairing_code" in body and body["pairing_code"]
+
+    decoded = json.loads(base64.b64decode(body["pairing_code"]))
+    assert decoded["projectSlug"] == slug
+    assert decoded["sessionId"] == session_id
+    assert decoded["token"] == body["token"]
+    assert decoded["backendUrl"].startswith("http")
+
+    # The decoded token is the real thing, not a placeholder -- prove it
+    # by actually connecting with it, exactly as the popup would after
+    # decoding the pasted pairing code.
+    ext = _fresh_client()
+    connect = ext.post(f"/api/{slug}/recording-sessions/{session_id}/extension-connect", json={"extension_token": decoded["token"]})
+    assert connect.status_code == 200, connect.text
+    assert connect.json()["status"] == "RECORDING"
 
 
 def test_extension_authorization_only_mintable_once_requested(auth_client, project_slug):

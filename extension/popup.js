@@ -33,16 +33,54 @@ async function refreshStatus() {
   }
 }
 
-document.getElementById("connectBtn").addEventListener("click", async () => {
+// Decodes the one-paste pairing code (base64 JSON: {backendUrl,
+// projectSlug, sessionId, token}) minted by POST .../authorize-extension.
+// Returns null (and sets a status message) if the pasted text isn't a
+// valid pairing code -- never throws.
+function decodePairingCode(raw) {
+  try {
+    const decoded = JSON.parse(atob(raw));
+    if (!decoded.backendUrl || !decoded.projectSlug || !decoded.sessionId || !decoded.token) {
+      setStatus("Pairing code is missing fields -- copy it again from QA-Again.");
+      return null;
+    }
+    return {
+      backendUrl: String(decoded.backendUrl),
+      projectSlug: String(decoded.projectSlug),
+      sessionId: String(decoded.sessionId),
+      extensionToken: String(decoded.token),
+    };
+  } catch {
+    setStatus("Pairing code is not valid -- copy it again from QA-Again.");
+    return null;
+  }
+}
+
+// Primary path: a single pasted pairing code. Falls back to the four
+// manually-entered Advanced fields (unchanged, pre-pairing-code
+// behavior) when the pairing code box is left empty.
+function resolveConnectionFields() {
+  const pairingCodeRaw = document.getElementById("pairingCode").value.trim();
+  if (pairingCodeRaw) {
+    return decodePairingCode(pairingCodeRaw);
+  }
+
   const backendUrl = document.getElementById("backendUrl").value.trim();
   const projectSlug = document.getElementById("projectSlug").value.trim();
   const sessionId = document.getElementById("sessionId").value.trim();
   const extensionToken = document.getElementById("extensionToken").value.trim();
 
   if (!backendUrl || !projectSlug || !sessionId || !extensionToken) {
-    setStatus("Fill in every field first.");
-    return;
+    setStatus("Paste a pairing code, or fill in every Advanced field.");
+    return null;
   }
+  return { backendUrl, projectSlug, sessionId, extensionToken };
+}
+
+document.getElementById("connectBtn").addEventListener("click", async () => {
+  const fields = resolveConnectionFields();
+  if (!fields) return;
+  const { backendUrl, projectSlug, sessionId, extensionToken } = fields;
 
   let origin;
   try {

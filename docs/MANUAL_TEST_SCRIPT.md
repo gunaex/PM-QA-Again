@@ -535,30 +535,37 @@ Do this once before Sections 16–21.
 2. [ ] Open your target app in one tab, and QA-Again in another. On
        the Workflow Detail page, start a recording session — leave it
        at `REQUESTED` (don't run `npm run record` this time).
-3. [ ] Click **Authorize Extension** — confirm a short-lived token is
-       shown exactly once.
+3. [ ] Click **Authorize Extension** — confirm a short-lived **pairing
+       code** is shown exactly once, with 3-step paste instructions.
 4. [ ] Click the QA-Again Recorder extension icon while your target
-       tab is active. Enter the backend URL, project slug, session ID,
-       and the token from step 3 into the popup.
-5. [ ] Click **Start Recording** in the popup — confirm the session's
-       status moves to `RECORDING` in QA-Again's own UI (polling
-       picks it up).
-6. [ ] Interact with the target tab normally (no separate Playwright
+       tab is active. Paste the pairing code from step 3 into the one
+       text box and click **Start Recording on This Tab** — confirm
+       the session's status moves to `RECORDING` in QA-Again's own UI
+       (polling picks it up), and that a real Chrome permission prompt
+       appeared naming the correct backend origin.
+5. [ ] Confirm the **Advanced** fallback still works: expand it, fill
+       in backend URL / project slug / session ID / token by hand
+       (from a fresh Authorize Extension call on a new session), and
+       confirm Start Recording connects the same way.
+6. [ ] Confirm a garbled/partial pairing code is rejected with a clear
+       "Pairing code is not valid" message rather than a silent
+       failure or a raw JS error.
+7. [ ] Interact with the target tab normally (no separate Playwright
        browser this time — it's your own tab). Confirm captured steps
        appear in QA-Again's Captured Steps list.
-7. [ ] Fill a password field on the target tab — confirm it's captured
+8. [ ] Fill a password field on the target tab — confirm it's captured
        as `sensitive` with no real value, exactly like Playwright mode.
-8. [ ] Use **Undo last action** from the extension popup — confirm it
+9. [ ] Use **Undo last action** from the extension popup — confirm it
        removes the step (same effect as the QA-Again UI's own Undo).
-9. [ ] **Pause**/**Resume** from the extension popup — confirm the
-       QA-Again UI reflects the state change.
-10. [ ] **Stop** from the extension popup — confirm the session status
+10. [ ] **Pause**/**Resume** from the extension popup — confirm the
+        QA-Again UI reflects the state change.
+11. [ ] **Stop** from the extension popup — confirm the session status
         moves to `STOPPED` and the extension's authorization is
         revoked (a repeat call using the same token should now fail).
-11. [ ] Review and **Save as Draft Revision** exactly as in Section 17
+12. [ ] Review and **Save as Draft Revision** exactly as in Section 17
         — confirm it works identically regardless of which capture
         mode produced the steps.
-12. [ ] Confirm the extension never requested/used a
+13. [ ] Confirm the extension never requested/used a
         `host_permissions` prompt beyond what's declared in its
         manifest, and that closing the browser entirely clears its
         stored session token (`chrome.storage.session`, not

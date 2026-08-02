@@ -10,6 +10,7 @@ difference: its payload is a buffer of *candidate* RecordedStep rows a
 human reviews, edits, and explicitly saves -- never an auto-published
 workflow revision.
 """
+import base64
 import json
 import secrets
 import uuid
@@ -500,21 +501,36 @@ def save_as_draft(
 
 @router.post("/{session_id}/authorize-extension", response_model=schemas.ExtensionAuthorizationOut)
 def authorize_extension(
-    slug: str, session_id: int, db: Session = Depends(get_project_db), user: models.User = Depends(require_tester),
+    slug: str, session_id: int, request: Request, db: Session = Depends(get_project_db), user: models.User = Depends(require_tester),
 ):
     """Mints a short-lived, session-scoped authorization the extension
     presents on every subsequent call -- never the tester's own JWT,
     never the global RunnerToken. Called from QA-Again's own UI (the
     tester's real login session), which then hands the raw token to the
-    extension out-of-band (e.g. a pairing code the tester copies into
-    the popup). The session must still be REQUESTED -- an authorization
+    extension out-of-band via the pairing code the tester copies into
+    the popup. The session must still be REQUESTED -- an authorization
     is minted once, for the one session it's about to connect."""
     session = _get_session(db, session_id)
     if session.status != "REQUESTED":
         raise HTTPException(status_code=400, detail=f"Can only authorize a REQUESTED session (current status: {session.status})")
     raw_token, record = _issue_extension_authorization(db, session_id, user.email)
+
+    # One-paste pairing code: everything the extension popup previously
+    # required as four hand-typed fields, bundled into a single base64
+    # string. request.base_url reflects the Host (and X-Forwarded-*
+    # via the proxy-headers middleware) the frontend actually reached
+    # this backend on -- through the Vite dev proxy (changeOrigin) that
+    # is the backend's own 127.0.0.1:8000, and in production the real
+    # deployed backend origin, so the code works in both without the
+    # tester ever typing a URL.
+    backend_url = str(request.base_url).rstrip("/")
+    pairing_payload = json.dumps(
+        {"backendUrl": backend_url, "projectSlug": slug, "sessionId": session_id, "token": raw_token}
+    )
+    pairing_code = base64.b64encode(pairing_payload.encode("utf-8")).decode("ascii")
+
     return schemas.ExtensionAuthorizationOut(
-        id=record.id, recording_session_id=session_id, token=raw_token,
+        id=record.id, recording_session_id=session_id, token=raw_token, pairing_code=pairing_code,
         expires_at=record.expires_at, hard_cap_at=record.hard_cap_at,
     )
 

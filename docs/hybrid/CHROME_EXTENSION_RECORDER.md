@@ -55,53 +55,65 @@ Tester's Chrome                    QA-Again backend
 1. Open target app tab (normal browsing, no extension involved yet)
 2. Open QA-Again in ANOTHER tab, create/select a RecordingSession
    (existing POST /recording-sessions -- unchanged)
-3. Click the QA-Again Recorder extension icon (activeTab grant for
-   THIS click only, on whichever tab is currently active)
-4. Extension popup: enter backend URL, pick project + session
-5. Popup calls  ──────────────────►  POST /{session}/authorize-extension
+3. In QA-Again's own tab, click "Authorize Extension" ──►
+                                      POST /{session}/authorize-extension
                                       (tester's own QA-Again login
                                       session, via the QA-Again tab's
                                       own cookies -- the extension popup
-                                      itself never holds this call;
-                                      QA-Again's own UI makes it and
-                                      hands the extension a pairing code)
-6. Extension stores the short-lived
-   session token (chrome.storage.session
+                                      itself never holds this call).
+                                      Response includes pairing_code: a
+                                      single base64 string bundling
+                                      {backendUrl, projectSlug,
+                                      sessionId, token} -- everything the
+                                      popup previously needed as four
+                                      hand-typed fields, packaged into
+                                      one paste. Same secret, same
+                                      lifetime, shown once.
+4. Switch to the target tab, click the
+   QA-Again Recorder extension icon
+   (activeTab grant for THIS click
+   only, on whichever tab is currently
+   active), paste the pairing code
+   into the one text box, click
+   "Start Recording on This Tab" (the
+   four individual fields remain
+   available under an "Advanced"
+   fallback for manual entry if the
+   code can't be pasted)
+5. Popup decodes the pairing code
+   client-side and stores the
+   extracted token (chrome.storage.session
    -- cleared when the browser closes,
    never chrome.storage.local)
-7. User clicks "Start Recording" in
-   the popup (still the SAME tab,
-   activeTab still valid for this
-   user gesture)
    ──────────────────────────────►  POST /{session}/extension-connect
                                       (session REQUESTED -> RECORDING)
-8. Background injects the content
+6. Background injects the content
    script into the active tab only
    (chrome.scripting.executeScript,
    activeTab-gated)
-9. Content script observes real DOM
+7. Content script observes real DOM
    events on THIS tab only, builds a
    structured locator + redacts
    sensitive values, posts to the
    background worker
-10. Background batches/forwards      ────────────►  POST /{session}/steps
-    (idempotency_key per event,
-    same field the Playwright mode
-    already uses)
-11. QA-Again's own RecordingPanel
+8. Background batches/forwards       ────────────►  POST /{session}/steps
+   (idempotency_key per event,
+   same field the Playwright mode
+   already uses)
+9. QA-Again's own RecordingPanel
     (open in the other tab) polls
     GET /{session} and shows the
     new steps live -- same existing
     polling UI, no changes needed
-12. Pause/Resume/Stop/Undo from
+10. Pause/Resume/Stop/Undo from
     EITHER the extension popup OR
     QA-Again's own UI               ────────────►  same endpoints,
                                                     dual-authorized (see
                                                     below)
-13. Stop  ─────────────────────────► POST /{session}/stop
+11. Stop  ─────────────────────────► POST /{session}/stop
     (revokes the authorization
     immediately)
-14. Human reviews/edits captured
+12. Human reviews/edits captured
     steps in QA-Again (unchanged),
     Save as Draft (unchanged) →
     DRAFT WorkflowRevision, human

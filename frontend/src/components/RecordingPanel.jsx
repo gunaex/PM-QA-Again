@@ -67,7 +67,7 @@ export default function RecordingPanel({ slug, workflowId, canEdit, onDraftSaved
     setError(null)
     try {
       const result = await authorizeExtension(slug, session.id)
-      setExtensionToken(result.token)
+      setExtensionToken(result.pairing_code)
     } catch (err) {
       setError(err.response?.data?.detail || 'Could not authorize the extension')
     }
@@ -214,8 +214,8 @@ export default function RecordingPanel({ slug, workflowId, canEdit, onDraftSaved
           ) : (
             <div className="bg-gray-50 rounded p-2 space-y-1">
               <p className="text-gray-500">
-                Paste this into the extension popup along with this backend's URL, project slug (<code>{slug}</code>), and
-                session ID (<code>{session.id}</code>). Shown once — copy it now.
+                1. Open the tab you want to record. 2. Click the QA-Again Recorder icon. 3. Paste this code below and
+                click Start Recording. Shown once — copy it now.
               </p>
               <code className="block break-all bg-white border border-gray-200 rounded px-2 py-1 select-all">{extensionToken}</code>
             </div>
