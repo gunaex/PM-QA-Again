@@ -44,30 +44,39 @@ substitute for.
 
 ## 1. Accounts and roles
 
-QA-Again has three global roles: `ADMIN`, `TESTER`, `VIEWER`
-(ADR-0001 — roles are global per user, not per-project).
+QA-Again has three global roles: `ADMIN`, `TESTER`, `VIEWER` — still a
+single global column per user (ADR-0001), but since ADR-0003 each
+non-ADMIN account also only reaches the specific projects an admin has
+explicitly granted it (see Section 2a).
 
 1. [ ] **(ADMIN)** Log in with the bootstrap admin account. You should
        be forced to set a new password immediately (`must_change
        password` flow) — confirm this happens and that the new
        password works on the next login.
-2. [ ] **(ADMIN, API)** Create a TESTER account:
-       ```bash
-       curl -b cookies.txt -X POST http://127.0.0.1:8000/api/auth/users \
-         -H "Content-Type: application/json" \
-         -d '{"email":"tester1@example.com","password":"TempPass123!","role":"TESTER"}'
-       ```
-3. [ ] **(ADMIN, API)** Create a VIEWER account the same way with
-       `"role":"VIEWER"`.
-4. [ ] **(ADMIN, API)** `GET /api/auth/users` — confirm all three
-       accounts (admin, tester1, viewer1) are listed with the correct
-       roles.
+2. [ ] **(ADMIN)** Top nav → **Users** (only visible to ADMIN) → fill in
+       email `tester1@example.com`, a temporary password, role
+       `TESTER`, click **Create User**. Confirm a confirmation banner
+       appears and the account shows up in the list below.
+3. [ ] **(ADMIN)** Create a second account the same way,
+       `viewer1@example.com`, role `VIEWER`.
+4. [ ] **(ADMIN)** Confirm both new rows show **Manage projects** (not
+       "All projects", which only ADMIN rows show) and, before granting
+       anything, that expanding "Manage projects" shows no project
+       toggled on — zero access by default.
 5. [ ] Log in as `tester1` — confirm the forced password-change flow
-       triggers on this first login too.
-6. [ ] Log in as `viewer1` — same forced password-change check.
+       triggers on this first login too, and that the Projects page is
+       empty with the message "No projects assigned to your account yet
+       — ask an admin to grant you access" (not the "create one" message
+       ADMIN sees).
+6. [ ] Log in as `viewer1` — same forced password-change check and
+       empty-with-explanation project list.
 7. [ ] Log out and log back in as each account at least once — confirm
        the session persists (you land signed-in, not back at
        `/login`).
+8. [ ] **(ADMIN, API, optional)** Confirm the underlying endpoints still
+       work directly if you ever need them outside the UI:
+       `GET /api/auth/users`, `GET/POST /api/auth/users/{id}/projects`,
+       `DELETE /api/auth/users/{id}/projects/{project_id}`.
 
 ---
 
@@ -78,9 +87,33 @@ Do this section as **(ADMIN)**.
 1. [ ] Projects page (`/`) → **New Project** → give it a name (e.g.
        `Manual Test Script Run`) and, optionally, a linked PM-Again
        URL. Confirm it appears in the project list with a generated
-       slug.
+       slug. Confirm this button is **not visible at all** if you're
+       logged in as `tester1`/`viewer1` from Section 1 (project
+       creation is ADMIN-only, ADR-0003).
 2. [ ] Open the project — confirm you land on its Dashboard, showing
        "No data yet" (no cycle exists yet).
+
+### 2a. Project access (ADR-0003)
+
+1. [ ] **(ADMIN)** Log back in as admin if needed. **Users** page →
+       expand **Manage projects** on the `tester1` row → click the
+       `Manual Test Script Run` project toggle. Confirm it turns green/
+       checked immediately (no page reload needed).
+2. [ ] Log in as `tester1` (same browser or a private window) — confirm
+       the Projects page now shows exactly `Manual Test Script Run` and
+       nothing else, and that opening it works normally (Dashboard,
+       Test Suites, etc. all load).
+3. [ ] **(ADMIN)** Back on the **Users** page, click the same project
+       toggle again to revoke `tester1`'s access. Confirm it turns off
+       immediately.
+4. [ ] As `tester1` (same still-logged-in session, no re-login), refresh
+       the Projects page — confirm the project has disappeared, and
+       that navigating directly to its URL (e.g. `/manual-test-script-run/dashboard`)
+       is rejected (403), not silently shown.
+5. [ ] **(ADMIN)** Grant `viewer1` access to the same project the same
+       way, and confirm `viewer1` can see and read it (Dashboard,
+       Reports, etc.) but none of the write actions (see the Viewer
+       Guide's "What you cannot do" list).
 3. [ ] From the project card, **Archive** the project — confirm it
        requires you to re-enter your own password, and that after
        archiving it either disappears from the default list or shows
