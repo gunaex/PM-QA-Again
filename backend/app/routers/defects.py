@@ -3,9 +3,9 @@ from sqlalchemy.orm import Session
 
 from .. import models, schemas
 from ..database import get_project_db
-from ..auth import get_current_user, require_tester
+from ..auth import require_tester, require_project_access
 
-router = APIRouter(prefix="/api/{slug}/defects", tags=["defects"], dependencies=[Depends(get_current_user)])
+router = APIRouter(prefix="/api/{slug}/defects", tags=["defects"], dependencies=[Depends(require_project_access)])
 
 
 @router.get("", response_model=list[schemas.DefectOut])

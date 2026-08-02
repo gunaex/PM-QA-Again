@@ -3,11 +3,11 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from ..database import get_project_db, get_master_db
-from ..auth import get_current_user
+from ..auth import require_project_access
 from ..quota import quota_status
 from ..metrics import result_counts, pass_rate, evidence_completeness, go_live_readiness
 
-router = APIRouter(prefix="/api/{slug}/reports", tags=["reports"], dependencies=[Depends(get_current_user)])
+router = APIRouter(prefix="/api/{slug}/reports", tags=["reports"], dependencies=[Depends(require_project_access)])
 
 # Maps report #5/#6's "stable checkpoint/logical case key" comparison
 # requirement (rebuild prompt §11) onto content_sha256 for change

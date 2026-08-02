@@ -205,6 +205,34 @@ require_tester = require_roles("ADMIN", "TESTER")
 require_admin = require_roles("ADMIN")
 
 
+# ---------- Project membership (ADR-0003) ----------
+# Layered on top of the still-global role above: ADMIN reaches every
+# project unconditionally; TESTER/VIEWER only reach a project they have a
+# ProjectMembership row for. Track-A-only (see ADR-0003) -- Hybrid/Runner
+# endpoints (workflows, workflow-runs, recording-sessions, hybrid-reports)
+# deliberately do not use this dependency in this pass.
+
+
+def require_project_access(slug: str, db: Session = Depends(get_master_db), user: models.User = Depends(get_current_user)) -> models.User:
+    """FastAPI dependency: `slug` is auto-resolved from the path parameter
+    of the same name, exactly like database.get_project_db(slug) already
+    does. 404s for a genuinely nonexistent project (never leaked past this
+    check to the domain routers, which today skip that check entirely --
+    see ADR-0003), 403s for "exists, but you're not a member"."""
+    project = db.query(models.Project).filter(models.Project.slug == slug).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if user.role != "ADMIN":
+        member = (
+            db.query(models.ProjectMembership)
+            .filter(models.ProjectMembership.project_id == project.id, models.ProjectMembership.user_id == user.id)
+            .first()
+        )
+        if not member:
+            raise HTTPException(status_code=403, detail="You do not have access to this project")
+    return user
+
+
 # ---------- Runner tokens (HYB-0) ----------
 # A separate credential namespace from user sessions — a QA Runner process
 # is not a person and should never hold a user's cookie/JWT. See

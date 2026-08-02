@@ -7,9 +7,9 @@ from sqlalchemy.orm import Session
 from .. import models, schemas
 from ..database import get_project_db
 from ..activity import log_change
-from ..auth import get_current_user, require_tester, require_admin
+from ..auth import require_tester, require_admin, require_project_access
 
-router = APIRouter(prefix="/api/{slug}/cycles", tags=["cycles"], dependencies=[Depends(get_current_user)])
+router = APIRouter(prefix="/api/{slug}/cycles", tags=["cycles"], dependencies=[Depends(require_project_access)])
 
 
 def most_recently_used_environment(db: Session, default: str = "production") -> str:

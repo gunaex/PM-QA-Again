@@ -3,11 +3,11 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from ..database import get_project_db, get_master_db
-from ..auth import get_current_user
+from ..auth import require_project_access
 from ..quota import quota_status
 from ..metrics import active_cycle, result_counts, pass_rate, evidence_completeness, go_live_readiness
 
-router = APIRouter(prefix="/api/{slug}/dashboard", tags=["dashboard"], dependencies=[Depends(get_current_user)])
+router = APIRouter(prefix="/api/{slug}/dashboard", tags=["dashboard"], dependencies=[Depends(require_project_access)])
 
 
 @router.get("")

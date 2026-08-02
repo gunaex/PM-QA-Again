@@ -24,10 +24,15 @@ class UserOut(BaseModel):
     id: int
     email: str
     role: str
+    active: bool
     must_change_password: bool
 
     class Config:
         from_attributes = True
+
+
+class UserActiveUpdate(BaseModel):
+    active: bool
 
 
 class ProjectCreate(BaseModel):
@@ -54,6 +59,19 @@ class ProjectOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# ---------- Project membership (ADR-0003) ----------
+
+
+class ProjectMembershipCreate(BaseModel):
+    project_id: int
+
+
+class ProjectMembershipOut(BaseModel):
+    project_id: int
+    project_name: str
+    project_slug: str
 
 
 # ---------- Test suites ----------

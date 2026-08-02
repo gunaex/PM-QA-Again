@@ -4,9 +4,9 @@ from sqlalchemy.orm import Session
 from .. import models, schemas
 from ..database import get_project_db
 from ..activity import log_changes
-from ..auth import get_current_user, require_tester
+from ..auth import require_tester, require_project_access
 
-router = APIRouter(prefix="/api/{slug}/suites", tags=["suites"], dependencies=[Depends(get_current_user)])
+router = APIRouter(prefix="/api/{slug}/suites", tags=["suites"], dependencies=[Depends(require_project_access)])
 
 
 @router.get("", response_model=list[schemas.TestSuiteOut])

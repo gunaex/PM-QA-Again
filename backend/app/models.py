@@ -40,6 +40,23 @@ class User(MasterBase):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class ProjectMembership(MasterBase):
+    """ADR-0003: layers per-project access on top of the still-global role
+    from ADR-0001 -- a TESTER/VIEWER can only reach a project they have a
+    row for here; ADMIN bypasses this table entirely (see
+    require_project_access in auth.py). Plain FK columns, no relationship()
+    -- matches every other model in this file (manual .query().filter()
+    joins throughout, never ORM relationships)."""
+
+    __tablename__ = "project_memberships"
+    __table_args__ = (UniqueConstraint("project_id", "user_id", name="uq_project_membership"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class RefreshToken(MasterBase):
     """Opaque refresh tokens, stored hashed (never the raw token) so a DB
     leak alone doesn't hand out working credentials. Revocable on logout."""

@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from .. import models, schemas
 from ..database import get_project_db, get_master_db
 from ..evidence_utils import sniff_image, MAX_EVIDENCE_SIZE_BYTES
-from ..auth import get_current_user, require_tester, require_admin
+from ..auth import get_current_user, require_tester, require_admin, require_project_access
 from ..quota import quota_status
 from ..storage import EvidenceStorage, get_evidence_storage
 
@@ -19,7 +19,7 @@ logger = logging.getLogger("evidence")
 router = APIRouter(
     prefix="/api/{slug}/cycles/{cycle_id}/results/{result_id}/evidence",
     tags=["evidence"],
-    dependencies=[Depends(get_current_user)],
+    dependencies=[Depends(require_project_access)],
 )
 
 

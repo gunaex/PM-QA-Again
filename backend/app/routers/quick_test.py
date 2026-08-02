@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 
 from .. import models, schemas
 from ..database import get_project_db
-from ..auth import get_current_user, require_tester
+from ..auth import require_tester, require_project_access
 from .cycles import create_cycle_with_snapshot, most_recently_used_environment, _to_out as _cycle_to_out
 
 router = APIRouter(prefix="/api/{slug}", tags=["quick-test"])
@@ -55,6 +55,7 @@ def create_quick_test(
     payload: schemas.QuickTestCreate,
     db: Session = Depends(get_project_db),
     user: models.User = Depends(require_tester),
+    _access: models.User = Depends(require_project_access),
 ):
     if not payload.title.strip():
         raise HTTPException(status_code=400, detail="title is required")
@@ -113,7 +114,7 @@ def create_quick_test(
 
 
 @router.get("/continue-last-test", response_model=schemas.ContinueLastTestOut)
-def continue_last_test(slug: str, db: Session = Depends(get_project_db), user: models.User = Depends(get_current_user)):
+def continue_last_test(slug: str, db: Session = Depends(get_project_db), user: models.User = Depends(require_project_access)):
     """Finds where this tester (or, failing that, anyone) last left off
     in an in-progress cycle, so the Dashboard's "Continue last test" can
     jump straight back to the exact case, not just the cycle."""

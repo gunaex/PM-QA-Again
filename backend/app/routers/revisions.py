@@ -5,11 +5,11 @@ from sqlalchemy.orm import Session
 
 from .. import models, schemas
 from ..database import get_project_db
-from ..auth import get_current_user, require_tester, require_admin
+from ..auth import require_tester, require_admin, require_project_access
 from .cycles import create_cycle_with_snapshot, most_recently_used_environment, _to_out as _cycle_to_out
 
 router = APIRouter(
-    prefix="/api/{slug}/suites/{suite_id}/revisions", tags=["revisions"], dependencies=[Depends(get_current_user)]
+    prefix="/api/{slug}/suites/{suite_id}/revisions", tags=["revisions"], dependencies=[Depends(require_project_access)]
 )
 
 
