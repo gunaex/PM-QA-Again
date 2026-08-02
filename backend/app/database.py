@@ -80,6 +80,15 @@ PROJECT_COLUMN_PATCHES: dict[str, dict[str, str]] = {
         "workflow_step_run_id": "INTEGER",
         "checkpoint_decision_id": "INTEGER",
     },
+    # ADR-HYB-002 fix: idempotency_key was added to RecordedStep after
+    # some project databases already existed -- missing from this dict
+    # meant ensure_indexes() below tried to index a column that had
+    # never actually been added to those pre-existing recorded_steps
+    # tables ("no such column: idempotency_key" on every request that
+    # touched that project, since every request calls get_project_engine).
+    "recorded_steps": {
+        "idempotency_key": "TEXT",
+    },
 }
 
 # Additive index patches (docs/PERFORMANCE_FAST_PASS.md) — `CREATE INDEX
