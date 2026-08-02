@@ -19,35 +19,53 @@ from . import models
 
 
 def run_status_counts(db: Session) -> dict[str, int]:
-    """Denominator: every WorkflowRun row that exists in this project,
-    regardless of age. One GROUP BY, not one query per status."""
+    """Denominator: every non-preview WorkflowRun row that exists in
+    this project, regardless of age. One GROUP BY, not one query per
+    status. Preview runs (Phase E's "Test It Now") are deliberately
+    excluded from every aggregate in this module -- they're a tester's
+    private sanity check, never part of the audited record."""
     counts = {s: 0 for s in models.WORKFLOW_RUN_STATUSES}
-    for status, n in db.query(models.WorkflowRun.status, func.count(models.WorkflowRun.id)).group_by(models.WorkflowRun.status).all():
+    for status, n in (
+        db.query(models.WorkflowRun.status, func.count(models.WorkflowRun.id))
+        .filter(models.WorkflowRun.is_preview.is_(False))
+        .group_by(models.WorkflowRun.status)
+        .all()
+    ):
         counts[status] = n
     return counts
 
 
 def step_outcome_counts(db: Session) -> dict[str, int]:
     """Machine step outcomes. Denominator: every WorkflowStepRun row
-    (every attempted automated step across every run), not just the
-    latest attempt per step."""
+    belonging to a non-preview run (every attempted automated step
+    across every real run), not just the latest attempt per step."""
     counts = {s: 0 for s in models.STEP_RUN_STATUSES}
-    for status, n in db.query(models.WorkflowStepRun.status, func.count(models.WorkflowStepRun.id)).group_by(models.WorkflowStepRun.status).all():
+    rows = (
+        db.query(models.WorkflowStepRun.status, func.count(models.WorkflowStepRun.id))
+        .join(models.WorkflowRun, models.WorkflowRun.id == models.WorkflowStepRun.workflow_run_id)
+        .filter(models.WorkflowRun.is_preview.is_(False))
+        .group_by(models.WorkflowStepRun.status)
+        .all()
+    )
+    for status, n in rows:
         counts[status] = n
     return counts
 
 
 def checkpoint_decision_counts(db: Session) -> dict[str, int]:
     """Human checkpoint decisions. Denominator: every
-    WorkflowCheckpointDecision row (one per actual human decision,
-    append-only — a re-decided checkpoint counts each decision, not
-    just the latest)."""
+    WorkflowCheckpointDecision row belonging to a non-preview run (one
+    per actual human decision, append-only — a re-decided checkpoint
+    counts each decision, not just the latest)."""
     counts = {s: 0 for s in models.CHECKPOINT_DECISION_STATUSES}
-    for status, n in (
+    rows = (
         db.query(models.WorkflowCheckpointDecision.status, func.count(models.WorkflowCheckpointDecision.id))
+        .join(models.WorkflowRun, models.WorkflowRun.id == models.WorkflowCheckpointDecision.workflow_run_id)
+        .filter(models.WorkflowRun.is_preview.is_(False))
         .group_by(models.WorkflowCheckpointDecision.status)
         .all()
-    ):
+    )
+    for status, n in rows:
         counts[status] = n
     return counts
 
@@ -85,7 +103,11 @@ def locator_failure_frequency(db: Session, limit: int = 20) -> list[dict]:
             func.count(models.WorkflowStepRun.id),
         )
         .join(models.WorkflowStep, models.WorkflowStep.id == models.WorkflowStepRun.workflow_step_id)
-        .filter(models.WorkflowStepRun.failure_category.in_(["LOCATOR_NOT_FOUND", "LOCATOR_AMBIGUOUS"]))
+        .join(models.WorkflowRun, models.WorkflowRun.id == models.WorkflowStepRun.workflow_run_id)
+        .filter(
+            models.WorkflowStepRun.failure_category.in_(["LOCATOR_NOT_FOUND", "LOCATOR_AMBIGUOUS"]),
+            models.WorkflowRun.is_preview.is_(False),
+        )
         .group_by(models.WorkflowStepRun.workflow_step_id, models.WorkflowStep.description, models.WorkflowStepRun.failure_category)
         .order_by(func.count(models.WorkflowStepRun.id).desc())
         .limit(limit)
@@ -106,7 +128,8 @@ def failure_category_breakdown(db: Session) -> dict[str, int]:
     counts["UNCATEGORIZED"] = 0
     rows = (
         db.query(models.WorkflowStepRun.failure_category, func.count(models.WorkflowStepRun.id))
-        .filter(models.WorkflowStepRun.status == "FAILED")
+        .join(models.WorkflowRun, models.WorkflowRun.id == models.WorkflowStepRun.workflow_run_id)
+        .filter(models.WorkflowStepRun.status == "FAILED", models.WorkflowRun.is_preview.is_(False))
         .group_by(models.WorkflowStepRun.failure_category)
         .all()
     )
@@ -123,7 +146,7 @@ def runner_reliability(db: Session, master_db) -> list[dict]:
     by anyone are excluded — nothing to attribute them to)."""
     rows = (
         db.query(models.WorkflowRun.runner_id, models.WorkflowRun.status, func.count(models.WorkflowRun.id))
-        .filter(models.WorkflowRun.runner_id.isnot(None))
+        .filter(models.WorkflowRun.runner_id.isnot(None), models.WorkflowRun.is_preview.is_(False))
         .group_by(models.WorkflowRun.runner_id, models.WorkflowRun.status)
         .all()
     )
@@ -167,6 +190,8 @@ def retry_frequency(db: Session) -> dict:
     not three)."""
     rows = (
         db.query(models.WorkflowStepRun.workflow_run_id, models.WorkflowStepRun.workflow_step_id, func.max(models.WorkflowStepRun.attempt_number))
+        .join(models.WorkflowRun, models.WorkflowRun.id == models.WorkflowStepRun.workflow_run_id)
+        .filter(models.WorkflowRun.is_preview.is_(False))
         .group_by(models.WorkflowStepRun.workflow_run_id, models.WorkflowStepRun.workflow_step_id)
         .all()
     )
@@ -184,10 +209,14 @@ def runner_lost_frequency(db: Session) -> dict:
     status (RUNNER_LOST is one of those terminal statuses)."""
     total_terminal = (
         db.query(func.count(models.WorkflowRun.id))
-        .filter(models.WorkflowRun.status.in_(models.WORKFLOW_RUN_TERMINAL_STATUSES))
+        .filter(models.WorkflowRun.status.in_(models.WORKFLOW_RUN_TERMINAL_STATUSES), models.WorkflowRun.is_preview.is_(False))
         .scalar()
     )
-    lost = db.query(func.count(models.WorkflowRun.id)).filter(models.WorkflowRun.status == "RUNNER_LOST").scalar()
+    lost = (
+        db.query(func.count(models.WorkflowRun.id))
+        .filter(models.WorkflowRun.status == "RUNNER_LOST", models.WorkflowRun.is_preview.is_(False))
+        .scalar()
+    )
     return {
         "total_terminal_runs": total_terminal,
         "runner_lost_runs": lost,
@@ -205,11 +234,15 @@ def evidence_completeness_hybrid(db: Session) -> dict:
     ]
     if not expected_step_ids:
         return {"expected_step_runs": 0, "step_runs_with_evidence": 0, "completeness_rate": None}
+    non_preview_run_ids = {
+        row[0] for row in db.query(models.WorkflowRun.id).filter(models.WorkflowRun.is_preview.is_(False)).all()
+    }
     expected_step_runs = (
         db.query(func.count(models.WorkflowStepRun.id))
         .filter(
             models.WorkflowStepRun.workflow_step_id.in_(expected_step_ids),
             models.WorkflowStepRun.status.in_(["PASSED", "FAILED"]),
+            models.WorkflowStepRun.workflow_run_id.in_(non_preview_run_ids) if non_preview_run_ids else False,
         )
         .scalar()
     )
@@ -225,6 +258,7 @@ def evidence_completeness_hybrid(db: Session) -> dict:
         .filter(
             models.WorkflowStepRun.workflow_step_id.in_(expected_step_ids),
             models.WorkflowStepRun.status.in_(["PASSED", "FAILED"]),
+            models.WorkflowStepRun.workflow_run_id.in_(non_preview_run_ids) if non_preview_run_ids else False,
             models.WorkflowStepRun.id.in_(step_run_ids_with_evidence) if step_run_ids_with_evidence else False,
         )
         .scalar()
@@ -238,12 +272,16 @@ def evidence_completeness_hybrid(db: Session) -> dict:
 
 def defect_linkage(db: Session) -> dict:
     """Denominator: every Defect row created from a hybrid run/step/
-    checkpoint (workflow_run_id is not null) vs. the total defect count
-    in this project — shows what fraction of defects have hybrid
-    provenance at all, distinct from Track A's own manually-linked
-    defects."""
+    checkpoint (workflow_run_id is not null, and that run is not a
+    Phase E preview) vs. the total defect count in this project — shows
+    what fraction of defects have hybrid provenance at all, distinct
+    from Track A's own manually-linked defects."""
     total = db.query(func.count(models.Defect.id)).scalar()
-    hybrid_linked = db.query(func.count(models.Defect.id)).filter(models.Defect.workflow_run_id.isnot(None)).scalar()
+    preview_run_ids = {row[0] for row in db.query(models.WorkflowRun.id).filter(models.WorkflowRun.is_preview.is_(True)).all()}
+    q = db.query(func.count(models.Defect.id)).filter(models.Defect.workflow_run_id.isnot(None))
+    if preview_run_ids:
+        q = q.filter(models.Defect.workflow_run_id.notin_(preview_run_ids))
+    hybrid_linked = q.scalar()
     return {"total_defects": total, "hybrid_linked_defects": hybrid_linked}
 
 
@@ -259,7 +297,7 @@ def workflows_with_frequent_failures(db: Session, limit: int = 10) -> list[dict]
         )
         .join(models.WorkflowRevision, models.WorkflowRevision.workflow_id == models.WorkflowDefinition.id)
         .join(models.WorkflowRun, models.WorkflowRun.workflow_revision_id == models.WorkflowRevision.id)
-        .filter(models.WorkflowRun.status.in_(models.WORKFLOW_RUN_TERMINAL_STATUSES))
+        .filter(models.WorkflowRun.status.in_(models.WORKFLOW_RUN_TERMINAL_STATUSES), models.WorkflowRun.is_preview.is_(False))
         .group_by(models.WorkflowDefinition.id, models.WorkflowDefinition.name, models.WorkflowRun.status)
         .all()
     )
@@ -287,7 +325,12 @@ def slowest_workflow_steps(db: Session, limit: int = 10) -> list[dict]:
             func.count(models.WorkflowStepRun.id),
         )
         .join(models.WorkflowStep, models.WorkflowStep.id == models.WorkflowStepRun.workflow_step_id)
-        .filter(models.WorkflowStepRun.started_at.isnot(None), models.WorkflowStepRun.ended_at.isnot(None))
+        .join(models.WorkflowRun, models.WorkflowRun.id == models.WorkflowStepRun.workflow_run_id)
+        .filter(
+            models.WorkflowStepRun.started_at.isnot(None),
+            models.WorkflowStepRun.ended_at.isnot(None),
+            models.WorkflowRun.is_preview.is_(False),
+        )
         .group_by(models.WorkflowStepRun.workflow_step_id, models.WorkflowStep.description)
         .all()
     )
@@ -295,10 +338,12 @@ def slowest_workflow_steps(db: Session, limit: int = 10) -> list[dict]:
     for step_id, desc, n in rows:
         durations = (
             db.query(models.WorkflowStepRun.started_at, models.WorkflowStepRun.ended_at)
+            .join(models.WorkflowRun, models.WorkflowRun.id == models.WorkflowStepRun.workflow_run_id)
             .filter(
                 models.WorkflowStepRun.workflow_step_id == step_id,
                 models.WorkflowStepRun.started_at.isnot(None),
                 models.WorkflowStepRun.ended_at.isnot(None),
+                models.WorkflowRun.is_preview.is_(False),
             )
             .all()
         )
@@ -309,9 +354,18 @@ def slowest_workflow_steps(db: Session, limit: int = 10) -> list[dict]:
 
 
 def recent_hybrid_activity(db: Session, limit: int = 30) -> list[dict]:
-    """Most recent runner_execution_events across all runs, newest
-    first, capped at `limit` — never the full unbounded event log."""
-    events = db.query(models.RunnerExecutionEvent).order_by(models.RunnerExecutionEvent.id.desc()).limit(limit).all()
+    """Most recent runner_execution_events across all non-preview runs,
+    newest first, capped at `limit` — never the full unbounded event
+    log. A preview run's own activity is still visible on its own run
+    detail page, just excluded from this project-wide feed."""
+    events = (
+        db.query(models.RunnerExecutionEvent)
+        .join(models.WorkflowRun, models.WorkflowRun.id == models.RunnerExecutionEvent.workflow_run_id)
+        .filter(models.WorkflowRun.is_preview.is_(False))
+        .order_by(models.RunnerExecutionEvent.id.desc())
+        .limit(limit)
+        .all()
+    )
     return [
         {
             "id": e.id,
@@ -342,7 +396,8 @@ def checkpoint_waiting_summary(db: Session) -> dict:
     from . import hybrid_timing
 
     all_waits = []
-    run_ids = {d.workflow_run_id for d in decisions}
+    preview_run_ids = {row[0] for row in db.query(models.WorkflowRun.id).filter(models.WorkflowRun.is_preview.is_(True)).all()}
+    run_ids = {d.workflow_run_id for d in decisions} - preview_run_ids
     for run_id in run_ids:
         for cp in hybrid_timing.checkpoint_timings(db, run_id):
             if cp["checkpoint_waiting_duration_seconds"] is not None:

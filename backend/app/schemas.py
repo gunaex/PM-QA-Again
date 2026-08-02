@@ -776,6 +776,14 @@ class WorkflowRunCreate(BaseModel):
     cycle_test_result_id: Optional[int] = None
 
 
+class WorkflowPreviewRunCreate(BaseModel):
+    """No cycle_test_result_id field at all -- a preview run can never
+    be linked to Track A, not even optionally (see workflow_runs.py's
+    preview_run endpoint)."""
+
+    workflow_revision_id: int
+
+
 class WorkflowRunOut(BaseModel):
     id: int
     workflow_revision_id: int
@@ -789,6 +797,7 @@ class WorkflowRunOut(BaseModel):
     ended_at: Optional[datetime] = None
     result_summary: Optional[str] = None
     checkpoint_waiting_since: Optional[datetime] = None
+    is_preview: bool = False
     created_at: datetime
     updated_at: datetime
     # Flattened for the run list.

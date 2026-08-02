@@ -81,6 +81,99 @@ def test_run_timing_report_has_all_documented_buckets(auth_client, project_slug)
     assert body["checkpoints"] == []
 
 
+def test_preview_run_targets_a_draft_revision_and_is_excluded_from_reporting(auth_client, project_slug):
+    """Phase E: 'Test It Now' runs a DRAFT revision (never published) and
+    completes through the exact same claim/execute path a real run
+    uses, but must never show up in Track B's aggregate reporting --
+    only in the plain run list, clearly flagged is_preview=True."""
+    slug = project_slug
+    wf = auth_client.post(f"/api/{slug}/workflows", json={"name": "preview wf"}).json()
+    rev = auth_client.post(f"/api/{slug}/workflows/{wf['id']}/revisions", json={"revision_label": "preview-v1"}).json()
+    step = auth_client.post(
+        f"/api/{slug}/workflows/{wf['id']}/revisions/{rev['id']}/steps",
+        json={"step_type": "SCREENSHOT", "description": "preview step"},
+    ).json()
+    assert rev["status"] == "DRAFT"  # never published -- this is the whole point
+
+    dashboard_before = auth_client.get(f"/api/{slug}/hybrid-reports/dashboard").json()
+    counts_before = dashboard_before["run_status_counts"]
+
+    preview = auth_client.post(f"/api/{slug}/workflow-runs/preview", json={"workflow_revision_id": rev["id"]})
+    assert preview.status_code == 200, preview.text
+    preview_run = preview.json()
+    assert preview_run["is_preview"] is True
+    assert preview_run["cycle_test_result_id"] is None
+    assert preview_run["status"] == "QUEUED"
+
+    token = _issue_runner_token(auth_client, "preview-runner")
+    runner = _fresh_client()
+    runner.headers.update({"X-Runner-Token": token})
+    claim = runner.post(f"/api/{slug}/workflow-runs/claim").json()
+    assert claim["claimed"] is True
+    assert claim["run"]["id"] == preview_run["id"]
+    lease_token = claim["lease_token"]
+    sr = runner.post(
+        f"/api/{slug}/workflow-runs/{preview_run['id']}/step-runs",
+        json={"workflow_step_id": step["id"], "lease_token": lease_token},
+    ).json()
+    runner.put(
+        f"/api/{slug}/workflow-runs/{preview_run['id']}/step-runs/{sr['id']}",
+        json={"status": "PASSED", "lease_token": lease_token},
+    )
+    complete = runner.post(
+        f"/api/{slug}/workflow-runs/{preview_run['id']}/complete",
+        json={"status": "PASSED", "lease_token": lease_token},
+    )
+    assert complete.status_code == 200
+    assert complete.json()["status"] == "PASSED"
+
+    # Reject the same schema's cycle_test_result_id entirely -- the
+    # field doesn't even exist on WorkflowPreviewRunCreate, so passing
+    # it is silently ignored by pydantic rather than accepted. Claim
+    # and complete this second preview run too, so it doesn't linger
+    # QUEUED and get claimed by an unrelated later test.
+    reject = auth_client.post(
+        f"/api/{slug}/workflow-runs/preview",
+        json={"workflow_revision_id": rev["id"], "cycle_test_result_id": 999999},
+    )
+    assert reject.status_code == 200
+    reject_run = reject.json()
+    assert reject_run["cycle_test_result_id"] is None
+    claim2 = runner.post(f"/api/{slug}/workflow-runs/claim").json()
+    assert claim2["run"]["id"] == reject_run["id"]
+    runner.post(
+        f"/api/{slug}/workflow-runs/{reject_run['id']}/complete",
+        json={"status": "PASSED", "lease_token": claim2["lease_token"]},
+    )
+
+    # Still PASSED through the exact same claim/execute path -- verify
+    # via GET before checking it never touched the aggregates.
+    detail = auth_client.get(f"/api/{slug}/workflow-runs/{preview_run['id']}").json()
+    assert detail["status"] == "PASSED"
+    assert detail["is_preview"] is True
+
+    # Visible in the plain run list (the tester needs to see their own
+    # preview result)...
+    all_runs = auth_client.get(f"/api/{slug}/workflow-runs").json()
+    assert any(r["id"] == preview_run["id"] and r["is_preview"] is True for r in all_runs)
+
+    # ...but the PASSED count in run_status_counts must not have moved,
+    # even though this preview run just completed PASSED.
+    dashboard_after = auth_client.get(f"/api/{slug}/hybrid-reports/dashboard").json()
+    counts_after = dashboard_after["run_status_counts"]
+    assert counts_after == counts_before, (
+        f"preview run leaked into aggregate reporting: before={counts_before} after={counts_after}"
+    )
+
+    # Rejects publishing to a real run when the revision has never been
+    # published -- confirms preview-run truly bypassed the PUBLISHED
+    # gate rather than the revision having been silently published.
+    assert rev["status"] == "DRAFT"
+    real_run_attempt = auth_client.post(f"/api/{slug}/workflow-runs", json={"workflow_revision_id": rev["id"]})
+    assert real_run_attempt.status_code == 400
+    assert "PUBLISHED" in real_run_attempt.json()["detail"]
+
+
 def test_evidence_upload_duration_is_recorded(auth_client, project_slug):
     slug = project_slug
     wf = auth_client.post(f"/api/{slug}/workflows", json={"name": "evidence timing wf"}).json()

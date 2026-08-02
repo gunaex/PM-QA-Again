@@ -35,6 +35,7 @@ from ..auth import get_current_user, require_tester, require_admin, get_current_
 from ..quota import quota_status
 from ..rate_limit import limiter
 from ..storage import EvidenceStorage, get_evidence_storage
+from .workflows import _validate_step_fields
 
 logger = logging.getLogger("workflow_runs")
 
@@ -155,6 +156,65 @@ def queue_run(
         cycle_test_result_id=payload.cycle_test_result_id,
         status="QUEUED",
         queued_by=user.email,
+    )
+    db.add(run)
+    db.flush()
+    _add_event(db, run.id, "RUN_QUEUED", "HUMAN")
+    db.commit()
+    db.refresh(run)
+    return _to_run_out(db, run)
+
+
+@router.post("/preview", response_model=schemas.WorkflowRunOut)
+def preview_run(
+    slug: str,
+    payload: schemas.WorkflowPreviewRunCreate,
+    db: Session = Depends(get_project_db),
+    user: models.User = Depends(require_tester),
+):
+    """Phase E: a tester's own "Test It Now" sanity check -- runs through
+    the exact same claim/execute/report-progress path as a real run
+    (the runner's /claim doesn't care about revision.status), but
+    deliberately skips queue_run's "must be PUBLISHED" gate (the whole
+    point is testing a DRAFT before an admin ever publishes it) and can
+    never carry a cycle_test_result_id (schemas.WorkflowPreviewRunCreate
+    doesn't even accept the field). is_preview=True keeps it out of
+    every Track A/B reporting and export query -- a preview never
+    becomes part of the audited record, and this endpoint never
+    touches a revision's publish status either. Publish stays entirely
+    ADMIN-only and unaffected by this."""
+    revision = db.query(models.WorkflowRevision).filter(models.WorkflowRevision.id == payload.workflow_revision_id).first()
+    if not revision:
+        raise HTTPException(status_code=404, detail="Workflow revision not found")
+
+    steps = (
+        db.query(models.WorkflowStep)
+        .filter(models.WorkflowStep.revision_id == revision.id, models.WorkflowStep.enabled.is_(True))
+        .all()
+    )
+    if not steps:
+        raise HTTPException(status_code=400, detail="Cannot preview-run a revision with no enabled steps")
+    for step in steps:
+        _validate_step_fields(
+            step.step_type,
+            {
+                "locator_strategy": step.locator_strategy,
+                "locator_value": step.locator_value,
+                "input_value": step.input_value,
+                "expected_value": step.expected_value,
+                "checkpoint_instructions": step.checkpoint_instructions,
+                "is_sensitive": step.is_sensitive,
+                "evidence_policy": step.evidence_policy,
+                "repeat_count": step.repeat_count,
+            },
+        )
+
+    run = models.WorkflowRun(
+        workflow_revision_id=revision.id,
+        cycle_test_result_id=None,
+        status="QUEUED",
+        queued_by=user.email,
+        is_preview=True,
     )
     db.add(run)
     db.flush()

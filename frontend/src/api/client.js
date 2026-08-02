@@ -264,6 +264,10 @@ export const queueWorkflowRun = (slug, workflowRevisionId, cycleTestResultId = n
     .then((r) => r.data)
 export const getWorkflowRun = (slug, runId) => api.get(`/${slug}/workflow-runs/${runId}`).then((r) => r.data)
 export const cancelWorkflowRun = (slug, runId) => api.post(`/${slug}/workflow-runs/${runId}/cancel`).then((r) => r.data)
+// Phase E: "Test It Now" -- runs a DRAFT revision without publishing it.
+// Never counted in reports/export (see backend hybrid_metrics.py).
+export const previewWorkflowRun = (slug, workflowRevisionId) =>
+  api.post(`/${slug}/workflow-runs/preview`, { workflow_revision_id: workflowRevisionId }).then((r) => r.data)
 
 // Manual checkpoints (HYB-4)
 export const getCheckpointContext = (slug, runId, workflowStepId) =>

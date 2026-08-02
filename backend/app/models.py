@@ -772,6 +772,14 @@ class WorkflowRun(ProjectBase):
     # or terminal decision -- powers the checkpoint UI's elapsed-waiting-
     # time display without recomputing it from the event log every poll.
     checkpoint_waiting_since = Column(DateTime, nullable=True)
+    # Phase E: a tester's own "Test It Now" sanity check against a DRAFT
+    # revision -- runs through the exact same claim/execute/report path
+    # as a real run, but is never counted in Track A/B reporting/export
+    # and can never carry a cycle_test_result_id (enforced in the
+    # preview-run router, not just this default). Keeps the ADMIN-only
+    # publish gate meaningful: a preview never becomes part of the
+    # audited record no matter how many times it's re-run.
+    is_preview = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

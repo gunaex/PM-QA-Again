@@ -222,6 +222,7 @@ def step_duration_trend(db: Session, workflow_id: int, step_description: str, li
             models.WorkflowRevision.workflow_id == workflow_id,
             models.WorkflowStep.description == step_description,
             models.WorkflowRun.status.in_(models.WORKFLOW_RUN_TERMINAL_STATUSES),
+            models.WorkflowRun.is_preview.is_(False),
         )
         .order_by(models.WorkflowRun.created_at.asc())
         .limit(limit)
@@ -249,6 +250,7 @@ def run_duration_trend(db: Session, workflow_id: int, limit: int = 50) -> list[d
         .filter(
             models.WorkflowRevision.workflow_id == workflow_id,
             models.WorkflowRun.status.in_(models.WORKFLOW_RUN_TERMINAL_STATUSES),
+            models.WorkflowRun.is_preview.is_(False),
         )
         .order_by(models.WorkflowRun.created_at.asc())
         .limit(limit)

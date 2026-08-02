@@ -15,9 +15,16 @@ import {
   reorderRecordedSteps,
   requestLocatorTest,
   saveRecordingAsDraft,
+  previewWorkflowRun,
+  getWorkflowRun,
 } from '../api/client'
 import StatusBadge from './StatusBadge.jsx'
-import { describeStep } from '../utils/describeStep.js'
+import RunResultBanner from './RunResultBanner.jsx'
+import { describeStep, STEP_RUN_ICON } from '../utils/describeStep.js'
+
+const RUN_TERMINAL_STATUSES = new Set([
+  'PASSED', 'FAILED', 'BLOCKED', 'NOT_APPLICABLE', 'CANCELLED', 'RUNNER_LOST', 'SYSTEM_ERROR',
+])
 
 const ACTIVE_STATUSES = new Set(['REQUESTED', 'CLAIMED', 'RECORDING', 'PAUSED'])
 
@@ -58,6 +65,14 @@ export default function RecordingPanel({ slug, workflowId, canEdit, onDraftSaved
   const [error, setError] = useState(null)
   const [saving, setSaving] = useState(false)
   const [extensionToken, setExtensionToken] = useState(null)
+  // Phase E: "Test It Now" -- the just-saved DRAFT revision, and the
+  // preview run against it (if the tester clicked the button). Neither
+  // touches the ADMIN-only publish gate; a preview run is never
+  // counted in reports (see backend hybrid_metrics.py's is_preview
+  // filtering).
+  const [savedRevision, setSavedRevision] = useState(null)
+  const [previewRun, setPreviewRun] = useState(null)
+  const [previewError, setPreviewError] = useState(null)
   // Tracks which sensitive steps we've already auto-suggested a name
   // for, so a tester deliberately clearing the field never gets
   // silently overwritten again on the next poll/refresh.
@@ -69,6 +84,13 @@ export default function RecordingPanel({ slug, workflowId, canEdit, onDraftSaved
     const interval = setInterval(poll, 1500)
     return () => clearInterval(interval)
   }, [slug, session?.id])
+
+  useEffect(() => {
+    if (!previewRun?.id || RUN_TERMINAL_STATUSES.has(previewRun.status)) return
+    const poll = () => getWorkflowRun(slug, previewRun.id).then(setPreviewRun).catch(() => {})
+    const interval = setInterval(poll, 1500)
+    return () => clearInterval(interval)
+  }, [slug, previewRun?.id, previewRun?.status])
 
   useEffect(() => {
     if (session?.status !== 'STOPPED') return
@@ -170,6 +192,16 @@ export default function RecordingPanel({ slug, workflowId, canEdit, onDraftSaved
     refresh()
   }
 
+  const handleTestItNow = async () => {
+    setPreviewError(null)
+    try {
+      const run = await previewWorkflowRun(slug, savedRevision.id)
+      setPreviewRun(run)
+    } catch (err) {
+      setPreviewError(err.response?.data?.detail || 'Could not start a preview run')
+    }
+  }
+
   const handleSaveAsDraft = async (e) => {
     e.preventDefault()
     if (!revisionLabel.trim()) return
@@ -179,6 +211,9 @@ export default function RecordingPanel({ slug, workflowId, canEdit, onDraftSaved
       const revision = await saveRecordingAsDraft(slug, session.id, revisionLabel.trim())
       setSession(null)
       setRevisionLabel('')
+      setSavedRevision(revision)
+      setPreviewRun(null)
+      setPreviewError(null)
       onDraftSaved?.(revision)
     } catch (err) {
       setError(err.response?.data?.detail || 'Could not save this recording as a draft')
@@ -191,24 +226,66 @@ export default function RecordingPanel({ slug, workflowId, canEdit, onDraftSaved
 
   if (!session) {
     return (
-      <div className="bg-white border border-gray-200 rounded-lg p-4">
-        <p className="text-xs font-medium text-gray-500 uppercase mb-2">Record a Workflow</p>
-        <p className="text-xs text-gray-500 mb-2">
-          Opens a real, separate browser window that the QA Runner controls — interact with it directly; use the
-          buttons below to pause/resume/stop remotely. A runner process must be running (<code>npm run record</code>).
-        </p>
-        <div className="flex gap-2">
-          <input
-            value={targetUrl}
-            onChange={(e) => setTargetUrl(e.target.value)}
-            placeholder="Starting URL"
-            className="flex-1 px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-          />
-          <button onClick={handleStart} className="px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-md hover:bg-emerald-700">
-            Start Recording
-          </button>
+      <div className="space-y-3">
+        <div className="bg-white border border-gray-200 rounded-lg p-4">
+          <p className="text-xs font-medium text-gray-500 uppercase mb-2">Record a Workflow</p>
+          <p className="text-xs text-gray-500 mb-2">
+            Opens a real, separate browser window that the QA Runner controls — interact with it directly; use the
+            buttons below to pause/resume/stop remotely. A runner process must be running (<code>npm run record</code>).
+          </p>
+          <div className="flex gap-2">
+            <input
+              value={targetUrl}
+              onChange={(e) => setTargetUrl(e.target.value)}
+              placeholder="Starting URL"
+              className="flex-1 px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            />
+            <button onClick={handleStart} className="px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-md hover:bg-emerald-700">
+              Start Recording
+            </button>
+          </div>
+          {error && <p className="text-xs text-red-600 mt-2">{error}</p>}
         </div>
-        {error && <p className="text-xs text-red-600 mt-2">{error}</p>}
+
+        {savedRevision && (
+          <div className="bg-white border border-purple-200 rounded-lg p-4 space-y-2">
+            <p className="text-xs font-medium text-gray-500 uppercase">
+              Draft revision "{savedRevision.revision_label}" saved
+            </p>
+            {!previewRun ? (
+              <>
+                <p className="text-xs text-gray-500">
+                  See it run right now, without publishing -- a preview run is never counted in reports and doesn't
+                  require an admin.
+                </p>
+                <button onClick={handleTestItNow} className="px-3 py-1.5 text-xs bg-purple-600 text-white rounded-md hover:bg-purple-700">
+                  Test It Now
+                </button>
+                {previewError && <p className="text-xs text-red-600">{previewError}</p>}
+              </>
+            ) : (
+              <>
+                <p className="text-[10px] font-medium text-purple-700 uppercase">
+                  Preview (not published, not counted in reports)
+                </p>
+                <RunResultBanner status={previewRun.status} />
+                {(previewRun.step_runs || []).length > 0 && (
+                  <ol className="space-y-1 mt-1">
+                    {previewRun.step_runs.map((sr) => (
+                      <li key={sr.id} className="text-xs flex items-center gap-2">
+                        <span>{STEP_RUN_ICON[sr.status] || '⚪'}</span>
+                        <span>{describeStep(sr).text}</span>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+                <button onClick={handleTestItNow} className="px-3 py-1.5 text-xs border border-purple-300 text-purple-700 rounded-md hover:bg-purple-50">
+                  Run Preview Again
+                </button>
+              </>
+            )}
+          </div>
+        )}
       </div>
     )
   }

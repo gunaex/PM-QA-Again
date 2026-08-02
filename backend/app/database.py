@@ -58,9 +58,13 @@ PROJECT_COLUMN_PATCHES: dict[str, dict[str, str]] = {
         "upload_duration_ms": "INTEGER",
     },
     # HYB-4: paused-checkpoint timestamp on existing workflow_runs rows,
-    # and provenance links on existing defects rows.
+    # and provenance links on existing defects rows. Phase E adds
+    # is_preview to this same table (see the "workflow_runs" key note
+    # below -- dict keys must stay unique, so it's merged in here rather
+    # than as a second "workflow_runs" entry).
     "workflow_runs": {
         "checkpoint_waiting_since": "DATETIME",
+        "is_preview": "BOOLEAN DEFAULT 0",
     },
     # ADR-HYB-002: Chrome extension recorder link on existing
     # recording_sessions rows.
