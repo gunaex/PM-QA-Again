@@ -10,8 +10,7 @@ Written 2026-08-02. Supersedes the previous version of this file
 - **HYB-2 commit**: `0071a23`
 - **HYB-3 commit**: `6c4a3f1`
 - **HYB-4 commit**: `acbe56e`
-- **HYB-5 commit**: see the commit this file was last updated alongside
-  (recorded in the commit message and the final delivery report).
+- **HYB-5 commit**: `b7f9dc2` (pushed to `origin/feature/hybrid-mvp`).
 - **`main`** is at `bb2f539` — unaffected; all hybrid work lives only on
   `feature/hybrid-mvp`.
 - **`track-a-baseline` tag**: `bb2f539`.
