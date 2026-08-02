@@ -105,6 +105,15 @@ document.getElementById("connectBtn").addEventListener("click", async () => {
     setStatus("No active tab found.");
     return;
   }
+  // chrome://, edge://, the Web Store, and other internal pages can
+  // never accept an injected content script -- Chrome blocks this
+  // unconditionally, regardless of any permission granted above. Catch
+  // it here with a clear, actionable message instead of surfacing the
+  // raw "Cannot access a chrome:// URL" error from background.js.
+  if (!/^https?:\/\//.test(activeTab.url || "")) {
+    setStatus("Switch to the tab with the app you want to record first (not this browser page), then click the icon and try again.");
+    return;
+  }
 
   setStatus("Connecting...");
   const resp = await chrome.runtime.sendMessage({
