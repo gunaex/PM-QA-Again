@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from .. import models, schemas
 from ..database import get_master_db
-from ..auth import issue_runner_token, revoke_runner_token, require_admin
+from ..auth import issue_runner_token, revoke_runner_token, require_admin, get_current_user
 
 router = APIRouter(prefix="/api/runner-tokens", tags=["runner-tokens"])
 
@@ -48,6 +48,19 @@ def create_runner_token(
 def list_runner_tokens(db: Session = Depends(get_master_db), _admin: models.User = Depends(require_admin)):
     records = db.query(models.RunnerToken).order_by(models.RunnerToken.created_at.desc()).all()
     return [_to_out(r) for r in records]
+
+
+@router.get("/status", response_model=schemas.RunnerFleetStatusOut)
+def runner_fleet_status(db: Session = Depends(get_master_db), _user: models.User = Depends(get_current_user)):
+    """Deliberately not require_admin: any authenticated user (including
+    TESTER, queuing their own run) needs to know whether a QUEUED run
+    will ever actually get picked up -- without this, "nothing happens
+    after Queue Run" looks indistinguishable from broken. Returns only
+    an aggregate boolean, never labels/ids/tokens -- the detailed
+    per-runner list (list_runner_tokens above) stays ADMIN-only."""
+    records = db.query(models.RunnerToken).filter(models.RunnerToken.revoked == False).all()  # noqa: E712
+    any_online = any(_status_for(r) == "ONLINE" for r in records)
+    return schemas.RunnerFleetStatusOut(any_online=any_online)
 
 
 @router.put("/{token_id}/revoke", response_model=schemas.RunnerRegistrationOut)

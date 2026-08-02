@@ -20,6 +20,7 @@ import {
   queueWorkflowRun,
   getWorkflowRun,
   cancelWorkflowRun,
+  getRunnerFleetStatus,
 } from '../api/client'
 import { useAuth } from '../auth/AuthContext.jsx'
 import StatusBadge from '../components/StatusBadge.jsx'
@@ -62,6 +63,10 @@ export default function WorkflowDetail() {
   const [runs, setRuns] = useState([])
   const [expandedRunId, setExpandedRunId] = useState(null)
   const [expandedRunDetail, setExpandedRunDetail] = useState(null)
+  // Whether ANY runner process is currently online -- without this, a
+  // QUEUED run with nobody running `npm run execute[:watch]` just sits
+  // there forever with no visible explanation why nothing happens.
+  const [runnerOnline, setRunnerOnline] = useState(null) // null = not checked yet
 
   const selectedRevision = revisions.find((r) => r.id === selectedRevisionId) || null
   const isDraft = selectedRevision?.status === 'DRAFT'
@@ -109,6 +114,13 @@ export default function WorkflowDetail() {
     return () => clearInterval(interval)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug, revisions.length])
+
+  useEffect(() => {
+    const checkRunner = () => getRunnerFleetStatus().then((s) => setRunnerOnline(s.any_online)).catch(() => setRunnerOnline(null))
+    checkRunner()
+    const interval = setInterval(checkRunner, 15000)
+    return () => clearInterval(interval)
+  }, [])
 
   useEffect(() => {
     if (!expandedRunId) {
@@ -466,8 +478,23 @@ export default function WorkflowDetail() {
 
             {/* Runs (HYB-2) */}
             <div className="bg-white border border-gray-200 rounded-lg p-4">
-              <div className="flex items-center gap-2 mb-2">
+              <div className="flex items-center gap-2 mb-2 flex-wrap">
                 <p className="text-xs font-medium text-gray-500 uppercase">Runs ({runs.length})</p>
+                {runnerOnline !== null && (
+                  <span
+                    className={`px-2 py-0.5 rounded-full text-xs flex items-center gap-1 ${
+                      runnerOnline ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-800'
+                    }`}
+                    title={
+                      runnerOnline
+                        ? 'A runner process is online -- a queued run will be picked up automatically.'
+                        : 'No runner is online -- a queued run will sit and wait until one is started (see runner/start-runner.ps1 or start-runner.bat).'
+                    }
+                  >
+                    <span className={`w-1.5 h-1.5 rounded-full ${runnerOnline ? 'bg-green-500' : 'bg-amber-500'}`} />
+                    Runner: {runnerOnline ? 'Online' : 'Offline'}
+                  </span>
+                )}
                 {isPublished && canEdit && (
                   <button onClick={handleQueueRun} className="ml-auto px-3 py-1.5 text-xs bg-emerald-600 text-white rounded-md hover:bg-emerald-700">
                     Queue Run
@@ -475,6 +502,13 @@ export default function WorkflowDetail() {
                 )}
                 {!isPublished && <p className="ml-auto text-xs text-gray-400">Publish a revision to queue a run.</p>}
               </div>
+              {runnerOnline === false && (
+                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2 mb-2">
+                  No runner is online right now. Queuing a run is safe, but nothing will execute it until someone
+                  starts one -- run <code>runner\start-runner.ps1</code> (or <code>start-runner.bat</code>) and leave
+                  that window open.
+                </p>
+              )}
               {runs.length === 0 ? (
                 <p className="text-xs text-gray-400">No runs yet.</p>
               ) : (

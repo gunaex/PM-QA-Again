@@ -201,6 +201,26 @@ def test_tester_cannot_create_a_project(auth_client):
     assert r.status_code == 403
 
 
+def test_runner_fleet_status_is_readable_by_tester_not_just_admin(auth_client):
+    """A TESTER queuing their own run needs to know whether a runner is
+    even online -- unlike GET /api/runner-tokens (ADMIN-only, exposes
+    labels/ids), this aggregate boolean is intentionally readable by
+    any authenticated user, and must never leak per-runner details."""
+    _create_role_user(auth_client, "fleet-status-tester@example.com", "TesterPass123!", "TESTER")
+    tester = _login_as("fleet-status-tester@example.com", "TesterPass123!", "TesterPass456!")
+
+    r = tester.get("/api/runner-tokens/status")
+    assert r.status_code == 200, r.text
+    assert set(r.json().keys()) == {"any_online"}
+    assert isinstance(r.json()["any_online"], bool)
+
+    anon = _fresh_client()
+    assert anon.get("/api/runner-tokens/status").status_code == 401
+
+    # Detailed list stays ADMIN-only regardless.
+    assert tester.get("/api/runner-tokens").status_code == 403
+
+
 # ---------- Rate limiting ----------
 
 

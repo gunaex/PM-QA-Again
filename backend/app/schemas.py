@@ -249,6 +249,13 @@ class RunnerRegistrationOut(BaseModel):
         from_attributes = True
 
 
+class RunnerFleetStatusOut(BaseModel):
+    """The non-admin-safe subset of runner status -- just "will a queued
+    run ever get picked up," no labels/ids."""
+
+    any_online: bool
+
+
 class HybridRunCreate(BaseModel):
     label: Optional[str] = None
 

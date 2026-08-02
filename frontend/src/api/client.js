@@ -279,6 +279,7 @@ export const reviewCheckpointDecision = (slug, runId, decisionId, reviewStatus) 
 
 // Runner tokens (HYB-2)
 export const listRunnerTokens = () => api.get('/runner-tokens').then((r) => r.data)
+export const getRunnerFleetStatus = () => api.get('/runner-tokens/status').then((r) => r.data)
 export const createRunnerToken = (label) => api.post('/runner-tokens', { label }).then((r) => r.data)
 export const revokeRunnerToken = (tokenId) => api.put(`/runner-tokens/${tokenId}/revoke`).then((r) => r.data)
 
