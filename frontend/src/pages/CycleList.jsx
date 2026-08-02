@@ -4,6 +4,8 @@ import { listCycles, createCycle, listSuites, listRevisions } from '../api/clien
 import { useAuth } from '../auth/AuthContext.jsx'
 import StatusBadge from '../components/StatusBadge.jsx'
 
+const ENVIRONMENTS = ['NON-PROD', 'PROD', 'UAT', 'STR', 'Other']
+
 export default function CycleList() {
   const { slug } = useParams()
   const { user } = useAuth()
@@ -17,6 +19,9 @@ export default function CycleList() {
   const [loadError, setLoadError] = useState(null)
   const [creating, setCreating] = useState(false)
   const [form, setForm] = useState({ suite_id: '', script_revision_id: '', name: '', environment: '', target_base_url: '' })
+  // 'Other' shows a free-text input below the dropdown; any fixed choice
+  // writes straight into form.environment (the value actually submitted).
+  const [environmentChoice, setEnvironmentChoice] = useState('')
 
   const load = () => {
     setLoading(true)
@@ -109,13 +114,35 @@ export default function CycleList() {
               onChange={(e) => setForm({ ...form, name: e.target.value })}
               className="px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
             />
-            <input
-              required
-              placeholder="Environment (e.g. staging)"
-              value={form.environment}
-              onChange={(e) => setForm({ ...form, environment: e.target.value })}
-              className="px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-            />
+            <div>
+              <select
+                required
+                value={environmentChoice}
+                onChange={(e) => {
+                  const choice = e.target.value
+                  setEnvironmentChoice(choice)
+                  setForm({ ...form, environment: choice === 'Other' ? '' : choice })
+                }}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              >
+                <option value="">Select environment…</option>
+                {ENVIRONMENTS.map((env) => (
+                  <option key={env} value={env}>
+                    {env}
+                  </option>
+                ))}
+              </select>
+              {environmentChoice === 'Other' && (
+                <input
+                  required
+                  autoFocus
+                  placeholder="Environment name"
+                  value={form.environment}
+                  onChange={(e) => setForm({ ...form, environment: e.target.value })}
+                  className="w-full mt-2 px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              )}
+            </div>
             <input
               placeholder="Target URL (optional)"
               value={form.target_base_url}
