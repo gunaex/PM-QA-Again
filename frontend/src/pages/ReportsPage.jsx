@@ -410,7 +410,14 @@ export default function ReportsPage() {
           <label className="block text-xs font-medium text-gray-500 mb-1">Report</label>
           <select
             value={reportType}
-            onChange={(e) => setReportType(e.target.value)}
+            onChange={(e) => {
+              // Stale data from the previous report type must not be
+              // rendered by the new type's (shape-specific) view -- each
+              // view assumes the shape its own endpoint returns.
+              setReportType(e.target.value)
+              setData(null)
+              setError(null)
+            }}
             className="px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
           >
             {REPORT_TYPES.map((r) => (
