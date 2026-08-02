@@ -34,10 +34,17 @@ function apiUrl(config, path) {
 }
 
 async function postJson(config, path, body) {
+  // credentials: "omit" -- this extension authenticates purely via
+  // config.extensionToken, never a cookie. Without this, a tester
+  // logged into the QA-Again web app in the SAME Chrome profile gets
+  // that session cookie auto-attached to these cross-origin requests
+  // (host_permissions grant normal cookie access), which then trips
+  // the backend's CSRF-origin guard and 403s every extension call.
   const res = await fetch(apiUrl(config, path), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+    credentials: "omit",
   });
   const data = await res.json().catch(() => ({}));
   return { ok: res.ok, status: res.status, data };

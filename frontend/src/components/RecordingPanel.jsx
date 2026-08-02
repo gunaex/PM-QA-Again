@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   createRecordingSession,
   getRecordingSession,
@@ -20,6 +20,29 @@ import { describeStep } from '../utils/describeStep.js'
 
 const ACTIVE_STATUSES = new Set(['REQUESTED', 'CLAIMED', 'RECORDING', 'PAUSED'])
 
+// A sensitive field's real value is never captured (see content.js) --
+// the tester must supply a ${VAR_NAME} placeholder before a recording
+// with one can be saved. Guessing a sensible default from the field's
+// own description removes the "learn the ${VAR} syntax from a blank
+// box" friction; the tester can still edit or clear it afterward.
+const SECRET_NAME_HINTS = [
+  [/otp|one.?time.?pass/i, 'OTP'],
+  [/token/i, 'TOKEN'],
+  [/passcode|pin\b/i, 'PASSCODE'],
+  [/cvv|cvc/i, 'CARD_CVV'],
+  [/card.?number/i, 'CARD_NUMBER'],
+  [/password|pwd/i, 'PASSWORD'],
+  [/secret/i, 'SECRET'],
+]
+
+function suggestSecretName(step, fallbackIndex) {
+  const haystack = `${step.target_summary || ''} ${step.locator_value || ''}`
+  for (const [pattern, name] of SECRET_NAME_HINTS) {
+    if (pattern.test(haystack)) return `\${LOGIN_${name}}`
+  }
+  return `\${SECRET_${fallbackIndex}}`
+}
+
 /** HYB-3 recorder control panel. Recording itself happens inside a
  * separate Playwright-controlled browser the QA Runner process
  * launches (never this page's own browser) -- this panel is the
@@ -33,6 +56,10 @@ export default function RecordingPanel({ slug, workflowId, canEdit, onDraftSaved
   const [error, setError] = useState(null)
   const [saving, setSaving] = useState(false)
   const [extensionToken, setExtensionToken] = useState(null)
+  // Tracks which sensitive steps we've already auto-suggested a name
+  // for, so a tester deliberately clearing the field never gets
+  // silently overwritten again on the next poll/refresh.
+  const suggestedStepIds = useRef(new Set())
 
   useEffect(() => {
     if (!session?.id) return
@@ -41,11 +68,32 @@ export default function RecordingPanel({ slug, workflowId, canEdit, onDraftSaved
     return () => clearInterval(interval)
   }, [slug, session?.id])
 
+  useEffect(() => {
+    if (session?.status !== 'STOPPED') return
+    const sensitiveSteps = (session.recorded_steps || []).filter((s) => s.is_sensitive)
+    const toSuggest = sensitiveSteps.filter((s) => !s.input_value && !suggestedStepIds.current.has(s.id))
+    if (toSuggest.length === 0) return
+    let fallbackIndex = 1
+    Promise.all(
+      toSuggest.map((s) => {
+        suggestedStepIds.current.add(s.id)
+        const name = suggestSecretName(s, fallbackIndex++)
+        return updateRecordedStep(slug, session.id, s.id, { input_value: name })
+      }),
+    ).then(refresh)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slug, session?.id, session?.status, session?.recorded_steps])
+
   const handleStart = async () => {
     setError(null)
     try {
       const s = await createRecordingSession(slug, workflowId, targetUrl)
       setSession(s)
+      // A leftover pairing code from a previous session is tied to that
+      // session and would silently fail (or worse, connect the wrong
+      // session) if the tester pasted it into the extension for this
+      // new one -- always require a fresh Authorize Extension click.
+      setExtensionToken(null)
     } catch (err) {
       setError(err.response?.data?.detail || 'Could not start a recording session')
     }
@@ -77,6 +125,7 @@ export default function RecordingPanel({ slug, workflowId, canEdit, onDraftSaved
     if (!window.confirm('Discard this recording? All captured steps will be deleted.')) return
     await discardRecordingSession(slug, session.id)
     setSession(null)
+    setExtensionToken(null)
   }
 
   const handleInsertCheckpoint = async (e) => {
@@ -301,6 +350,13 @@ export default function RecordingPanel({ slug, workflowId, canEdit, onDraftSaved
                   <div className="mt-1 flex items-center gap-1">
                     <span className="text-gray-500">Variable name:</span>
                     <input
+                      // Remounts (re-applying defaultValue) whenever the
+                      // SAVED value changes -- e.g. right after the
+                      // auto-suggestion above lands -- without losing
+                      // in-progress keystrokes on every render otherwise
+                      // (this is an uncontrolled input on purpose, so a
+                      // slow network blip mid-typing can't clobber it).
+                      key={s.input_value || ''}
                       defaultValue={s.input_value || ''}
                       placeholder="${SECRET_LOGIN_PASSWORD}"
                       onBlur={(e) => e.target.value !== (s.input_value || '') && handleEditStep(s, { input_value: e.target.value })}
