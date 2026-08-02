@@ -21,6 +21,7 @@ Job protocol (docs/Autonomous hybird prompt.md's HYB-2 section):
 """
 import hashlib
 import logging
+import time
 import uuid
 from datetime import datetime, timedelta
 
@@ -32,6 +33,7 @@ from ..database import get_project_db, get_master_db
 from ..evidence_utils import sniff_image, MAX_EVIDENCE_SIZE_BYTES
 from ..auth import get_current_user, require_tester, require_admin, get_current_runner, _hash_token
 from ..quota import quota_status
+from ..rate_limit import limiter
 from ..storage import EvidenceStorage, get_evidence_storage
 
 logger = logging.getLogger("workflow_runs")
@@ -163,9 +165,17 @@ def queue_run(
 
 
 @router.get("", response_model=list[schemas.WorkflowRunOut], dependencies=[Depends(get_current_user)])
-def list_runs(slug: str, db: Session = Depends(get_project_db)):
+def list_runs(slug: str, status: str | None = None, db: Session = Depends(get_project_db)):
+    """HYB-5: optional `status` filter — used by the recovery runbook's
+    "find stuck runs" step (e.g. `?status=QUEUED` to spot a run that's
+    been waiting far longer than a runner should ever take to claim)."""
     _expire_stale_leases(db)
-    runs = db.query(models.WorkflowRun).order_by(models.WorkflowRun.created_at.desc()).all()
+    q = db.query(models.WorkflowRun)
+    if status:
+        if status not in models.WORKFLOW_RUN_STATUSES:
+            raise HTTPException(status_code=400, detail=f"status must be one of {models.WORKFLOW_RUN_STATUSES}")
+        q = q.filter(models.WorkflowRun.status == status)
+    runs = q.order_by(models.WorkflowRun.created_at.desc()).all()
     return [_to_run_out(db, r) for r in runs]
 
 
@@ -285,7 +295,9 @@ def claim_run(
 
 
 @router.post("/{run_id}/heartbeat", response_model=schemas.WorkflowRunOut)
+@limiter.limit("120/minute")
 def heartbeat(
+    request: Request,
     slug: str,
     run_id: int,
     payload: schemas.RunnerHeartbeatRequest,
@@ -313,7 +325,9 @@ def heartbeat(
 
 
 @router.post("/{run_id}/events", response_model=schemas.RunnerExecutionEventOut)
+@limiter.limit("300/minute")
 def post_event(
+    request: Request,
     slug: str,
     run_id: int,
     payload: schemas.RunnerEventCreate,
@@ -502,6 +516,7 @@ async def upload_run_evidence(
     if cycle and cycle.status == "LOCKED":
         raise HTTPException(status_code=400, detail="Cycle is LOCKED — evidence cannot be added. An admin must /reopen it first.")
 
+    upload_started = time.perf_counter()
     content = await file.read()
     if len(content) > MAX_EVIDENCE_SIZE_BYTES:
         raise HTTPException(status_code=400, detail=f"Evidence file exceeds the {MAX_EVIDENCE_SIZE_BYTES // (1024*1024)}MB limit")
@@ -548,6 +563,7 @@ async def upload_run_evidence(
         evidence_source="RUNNER",
         workflow_run_id=run.id,
         workflow_step_run_id=step_run_id,
+        upload_duration_ms=round((time.perf_counter() - upload_started) * 1000),
     )
     try:
         db.add(item)

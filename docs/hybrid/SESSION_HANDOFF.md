@@ -1,8 +1,7 @@
-# Session Handoff — Hybrid MVP delivery, paused after HYB-4
+# Session Handoff — HYB-5 complete
 
-Written 2026-08-02. This is a **deliberate clean stop between phases**,
-not a crash or a discovered blocker — see "Why stopped here" below.
-Supersedes the previous version of this file (written after HYB-3).
+Written 2026-08-02. Supersedes the previous version of this file
+(written after HYB-4).
 
 ## Current state
 
@@ -10,156 +9,108 @@ Supersedes the previous version of this file (written after HYB-3).
 - **HYB-1 commit**: `8d64495`
 - **HYB-2 commit**: `0071a23`
 - **HYB-3 commit**: `6c4a3f1`
-- **HYB-4 commit**: `acbe56e` (pushed to `origin/feature/hybrid-mvp`).
+- **HYB-4 commit**: `acbe56e`
+- **HYB-5 commit**: see the commit this file was last updated alongside
+  (recorded in the commit message and the final delivery report).
 - **`main`** is at `bb2f539` — unaffected; all hybrid work lives only on
   `feature/hybrid-mvp`.
 - **`track-a-baseline` tag**: `bb2f539`.
-- Working tree: clean except `docs/Autonomous hybird prompt.md` (the
-  user's own file, intentionally left untouched/unstaged throughout).
 
-## HYB-1, HYB-2, HYB-3 — complete, unchanged, not re-verified this session
+## HYB-1 through HYB-4 — complete, unchanged, not redesigned this session
 
-See prior handoff content preserved in git history (`8d64495`,
-`0071a23`, `6c4a3f1`) and `docs/ROADMAP.md`. Do not redo, rewrite, or
-re-verify.
+See prior handoff content preserved in git history and
+`docs/ROADMAP.md`'s HYB-1–HYB-4 entries. Not touched this session beyond
+reading them for context.
 
-## HYB-4 — complete and verified this session
+## HYB-5 — complete this session
 
-Full design/implementation detail lives in
-[HYB-4-CHECKPOINTS.md](HYB-4-CHECKPOINTS.md) (state machine, decision-
-conflict protection, paused-lease mechanics, lost-runner/lost-browser
-table, operator/tester instructions) and `docs/ROADMAP.md`'s HYB-4
-entry (full file-by-file detail). Summary:
+Full detail lives in `docs/ROADMAP.md`'s HYB-5 entry (file-by-file) and
+these dedicated documents:
 
-**Backend** (additive only): new `WorkflowCheckpointDecision` table
-(append-only, one row per decision, `source` always `HUMAN`,
-server-derived identity/timestamp). Decision-conflict protection is the
-same transaction that inserts the decision also flipping `run.status`
-away from `WAITING_FOR_HUMAN` — a racing second decision finds it
-already moved and gets `409`, never a silent overwrite. Idempotency via
-`idempotency_key`. Reason validation and NOT_APPLICABLE admin-review
-mirror `cycle_results.py` exactly. The paused lease
-(`WAITING_FOR_HUMAN`/`RESUMING`) now renews on a 300s timeout instead of
-the 60s active-execution one, using the *same* `lease_token` throughout
-— a resume never needs a fresh claim. New endpoints: `GET checkpoint`
-(full review context in one call), `POST checkpoint-decision`, `POST
-checkpoint-decisions/{id}/review`, `POST checkpoint-resume`
-(lease-gated — a different runner process cannot fabricate a resume).
-`EvidenceItem.checkpoint_decision_id` and `Defect.workflow_run_id`/
-`workflow_step_run_id`/`checkpoint_decision_id` are additive nullable
-links — no parallel evidence or defect subsystem.
+- [`docs/HYBRID_RUNNER_THREAT_MODEL.md`](../HYBRID_RUNNER_THREAT_MODEL.md)
+  — full threat coverage, each claim backed by a named test.
+- [`docs/hybrid/RECOVERY_RUNBOOK.md`](RECOVERY_RUNBOOK.md) — every
+  recovery scenario the spec listed.
+- [`docs/hybrid/RUNNER_CREDENTIAL_ROTATION.md`](RUNNER_CREDENTIAL_ROTATION.md)
+- [`docs/hybrid/HYBRID_GUIDES.md`](HYBRID_GUIDES.md) — architecture
+  overview + workflow-author/recorder/tester/checkpoint-reviewer/runner-
+  installation/runner-operator/reporting-export guides, consolidated
+  into one document (a deliberate, documented scope decision).
+- [`docs/hybrid/HYB5_SCALE_PERFORMANCE.md`](HYB5_SCALE_PERFORMANCE.md)
+  — real 60-step/2-revision/4-run measurement.
+- [`docs/hybrid/HYB5_VERIFICATION_SCOPE.md`](HYB5_VERIFICATION_SCOPE.md)
+  — **read this one first if continuing** — the exact honest accounting
+  of what was and wasn't verified for real this session.
 
-**Runner**: the `MANUAL_CHECKPOINT` branch in `executor.ts` no longer
-closes the browser — it captures/uploads a real screenshot, posts
-`CHECKPOINT_WAITING`, then polls in `waitForHumanDecision()` (keeps
-heartbeating, checks `page.isClosed()` for honest crash detection,
-checks `cancel_requested`). On `RESUMING` it calls `/checkpoint-resume`
-and continues the *same* step loop against the *same* `page`/`browser`
-objects.
+**Summary**: timing derivation (`backend/app/hybrid_timing.py`) reads
+existing HYB-2/HYB-4 timestamps/events — no schema change needed except
+one additive nullable column (`EvidenceItem.upload_duration_ms`).
+Hybrid dashboard/reports (`backend/app/hybrid_metrics.py`,
+`backend/app/routers/hybrid_reports.py`, new `/hybrid-reports` prefix,
+new frontend page) never touch Track A's own dashboard/reports.
+Excel export gained 8 new hybrid sheets appended after the original 7
+Track A sheets (unchanged). ZIP export's manifest gained a `hybrid`
+section linking every entity by id, plus checksum verification on every
+packaged evidence file. A full adversarial security test suite (17
+tests, `backend/tests/test_hybrid_security.py`) backs the new threat
+model doc — including a **documented, not newly-introduced**
+cross-project-runner-access trust boundary (RunnerToken has always been
+a global credential, same as every human user; HYB-5 made this an
+explicit tested fact rather than silently changing or ignoring it).
+Recovery/credential-rotation are mostly "already handled, now written
+down" — the lease-expiry sweep, decision-conflict CAS, and idempotency
+keys already built in HYB-2/HYB-4 cover almost every scenario the spec
+listed; one new operator affordance (`GET /workflow-runs?status=...`
+filter) was added.
 
-**Frontend**: `CheckpointPanel.jsx` (new), rendered inline in
-`WorkflowDetail.jsx`'s expanded-run view. Reuses `EvidenceGallery`/
-`AnnotationEditor` unchanged (just tagged with run/step-run ids) and the
-existing defect create/update endpoints — no parallel evidence viewer,
-no parallel defect UI.
+**Verification gate this session**: full backend pytest **95/95**
+(69 existing + 23 new + 3 modified assertions), frontend build clean,
+runner `tsc --noEmit` clean. A real 60-step/2-revision/4-run/3-checkpoint
+scale scenario ran against a real `uvicorn` process with real SQLite and
+real filesystem `EvidenceStorage`, driven by a real `X-Runner-Token`-
+authenticated HTTP client exercising every backend code path a real
+runner uses — full measurements in `HYB5_SCALE_PERFORMANCE.md`.
 
-**Verification**: 69/69 backend pytest (57 + 12 new, covering PASS-
-resume, FAIL-is-terminal-and-cannot-be-overwritten, BLOCKED/
-NOT_APPLICABLE reason validation and admin review, decision conflict,
-idempotent retry, `RUNNER_LOST` while paused via lease-duration
-monkeypatching, LOCKED-cycle rejection, defect provenance, wrong-lease
-resume rejection). Frontend build clean. Runner `tsc --noEmit` clean.
-**Real end-to-end, not mocked**: real FastAPI/SQLite backend, real
-Node.js/TypeScript runner, real headed Chromium, driven through the real
-HTTP API to simulate a human tester. Three real runs against a workflow
-with an automated step before and after a `MANUAL_CHECKPOINT`:
-(1) **PASS + resume** — pre-checkpoint steps set a `localStorage` marker
-and asserted it; runner paused and uploaded a real 7,720-byte screenshot
-(`evidence_source=RUNNER`); a real human PASS decision was submitted
-with real identity/timestamp; the *same* runner process observed
-`RESUMING`, resumed, and the post-checkpoint step found the marker
-**still set** — only possible if the in-memory browser context genuinely
-survived the pause; run reached `PASSED`, full HUMAN→RUNNER
-provenance-tagged event trail. (2) **FAIL is terminal** — a human FAIL
-ended the run `FAILED`; a racing second decision (simulating another
-tester or a retry) got `409` and did not overwrite it; the runner
-observed the terminal status and correctly declined to resume, never
-executing the two post-checkpoint steps. (3) **Cancellation while
-paused** — `cancel_requested` was set on a paused run; the runner's poll
-loop observed it and self-completed `CANCELLED`. Every scenario's full
-event/decision/step-run history was independently confirmed via the
-API. `runner/.env` (used only for this verification, holding a real
-issued runner token) is gitignored and was deleted after the session.
+**Explicitly not done this session** (see `HYB5_VERIFICATION_SCOPE.md`
+for the full accounting — stated here so it can't be missed):
+1. A literal headed-Chromium Playwright run of the 60-step fixture
+   (the scale scenario used a plain HTTP client presenting a real
+   runner token instead of an actual browser process).
+2. A from-scratch clean-environment rehearsal (fresh `.venv`/
+   `node_modules` from zero) — this session reused the already-installed
+   dependencies from the existing checkout.
+
+Both are real gaps, not fabricated as done. Recommended as the very
+next session's starting point.
 
 ## Current in-progress phase
 
-**None.** HYB-5 has not been started.
-
-## Not yet done
-
-- HYB-5: timing, reports, recovery, security, and handover — see
-  `docs/ROADMAP.md`'s HYB-5 bullet and the full requirement list in
-  `docs/Autonomous hybird prompt.md`'s HYB-5 section (queue/claim/
-  browser-startup/per-step/checkpoint-wait/resume/upload timing; timing
-  trends; machine-vs-human provenance reports; locator-failure and
-  runner-reliability reporting; hybrid Excel/ZIP export with real
-  evidence bytes and full manifest links; `docs/
-  HYBRID_RUNNER_THREAT_MODEL.md`; runner credential theft/revocation/
-  replay/duplicate-job/fake-event/secret-leakage/unauthorized-decision
-  tests; installation and credential-rotation docs; stuck-job/lost-run
-  recovery; a clean-environment rehearsal; a 50+-step workflow;
-  multiple sequential runs; an evidence-heavy run; a long checkpoint
-  pause; repeated locator failure; dashboard/report performance with
-  historical hybrid data; role-specific guides).
+**None.** HYB-5 is the last planned phase in
+`docs/Autonomous hybird prompt.md`'s scope. What remains before any
+production-readiness claim is Release Closure's three human-operated
+checks (unchanged by any hybrid work, see below) plus the two
+verification gaps above if a fuller confidence level is wanted before
+relying on this at 50+-step real-browser scale.
 
 ## Why stopped here
 
-Same reasoning as the three prior stops in this delivery: HYB-5 is
-another substantial, distinct body of work (timing infrastructure across
-every layer, a threat model with its own dedicated adversarial test
-suite, export format changes, multi-role documentation, a deliberately
-large 50+-step realistic workflow run) — it deserves its own full
-build-and-verify pass rather than being compressed into the same session
-as HYB-4's real pause/resume/conflict/cancellation verification.
-Deliberate stop at a clean phase boundary per the user's own documented
-fallback instruction, applied proactively — same discipline as every
-prior phase boundary in this delivery.
+HYB-5's own scope (13 sections in the source prompt) is now fully
+implemented and gated by a passing test suite, a real (if HTTP-client-
+driven rather than full-browser) scale scenario, and complete
+documentation. The two items in "explicitly not done" are the honest
+boundary of this session's real, verified work — continuing to claim
+more without actually running a real headed-browser 50+-step session or
+a real clean-environment install would cross into exactly the kind of
+fabricated completion evidence this delivery has avoided at every prior
+phase boundary.
 
-## Exact next implementation step
+## Release status
 
-1. Read this file in full, `docs/hybrid/HYB-4-CHECKPOINTS.md`, and
-   `docs/ROADMAP.md`'s HYB-1–HYB-4 entries.
-2. Read `docs/Autonomous hybird prompt.md`'s HYB-5 section in full —
-   it is long and covers five distinct areas (timing, reports, recovery,
-   security, handover); consider whether it's worth splitting into
-   sub-milestones within the HYB-5 session rather than one monolithic
-   pass, given its size relative to HYB-1–HYB-4 combined.
-3. Timing is the foundation the reports depend on — start there. Add
-   timestamp columns/derivation to the existing `WorkflowRun`/
-   `WorkflowStepRun`/`WorkflowCheckpointDecision` rows (most of the raw
-   data — `started_at`/`ended_at`/`created_at`/`decided_at`/
-   `checkpoint_waiting_since` — already exists; this is mostly about
-   *deriving and reporting* durations, not capturing new raw timestamps)
-   before building the report endpoints that consume them.
-4. `docs/HYBRID_RUNNER_THREAT_MODEL.md` and its adversarial test suite
-   (credential theft/revocation/replay/duplicate jobs/fake events/
-   secret leakage/unauthorized decisions) is a distinct, security-
-   critical piece — plan it as its own real Node.js/FastAPI verification
-   pass, not something to write by inspection alone.
-5. The 50+-step workflow, multiple sequential runs, evidence-heavy run,
-   long checkpoint pause, and repeated-locator-failure scenarios are all
-   real-system acceptance criteria — budget real execution time for
-   them, not just code review.
-6. Full gate: backend pytest, frontend lint/build, runner
-   typecheck/build/tests, then the real-system verification above.
-7. Update `docs/ROADMAP.md`, write a fresh
-   `docs/hybrid/SESSION_HANDOFF.md`, commit, push to
-   `feature/hybrid-mvp`, record the hash.
-8. Release Closure's three human-operated checks (real R2 staging smoke
-   test, human-operated Screen Capture acceptance, human-operated
-   clipboard-paste acceptance) remain unresolved regardless of hybrid
-   progress — the project remains **NOT PRODUCTION READY** until those
-   are run and recorded, independent of how much of HYB-5 completes.
+**NOT PRODUCTION READY.** Unchanged by HYB-5. The three Release Closure
+blockers (real Cloudflare R2 staging smoke test, human-operated Screen
+Capture API acceptance, human-operated clipboard-image paste acceptance)
+remain unresolved and untouched by any hybrid work, HYB-0 through
+HYB-5.
 
 ## Exact commands to resume
 
@@ -167,58 +118,49 @@ prior phase boundary in this delivery.
 cd d:/git/PM-QA-Again
 git checkout feature/hybrid-mvp
 git pull origin feature/hybrid-mvp
-git log --oneline -5   # confirm HYB-4's commit is at or near HEAD
+git log --oneline -6   # confirm HYB-5's commit is at or near HEAD
 
 # Backend
 cd backend
-python -m venv .venv
-./.venv/Scripts/pip install -r requirements-dev.txt
-./.venv/Scripts/python -m pytest -q   # expect 69 passed
+./.venv/Scripts/python -m pytest -q   # expect 95 passed
 
 # Frontend
 cd ../frontend
-npm install
 npm run build   # expect clean
 
 # Runner
 cd ../runner
-npm install
 npm run typecheck   # expect clean
-npx playwright install chromium   # if not already cached
 ```
 
-To manually re-verify HYB-4's real checkpoint pause/resume (optional,
-already proven this session): start the backend, create a project with
-a published workflow containing a `MANUAL_CHECKPOINT` step, queue a run
-against a real cycle result, issue a runner token, write `runner/.env`
-(gitignored) with `BACKEND_BASE_URL`/`PROJECT_SLUG`/`RUNNER_TOKEN`/
-`TARGET_BASE_URL`/`TARGET_EMAIL`/`TARGET_PASSWORD`, `npm run execute` —
-it will pause at the checkpoint with a real headed Chromium window still
-open; submit a decision via `POST /api/{slug}/workflow-runs/{id}/
-checkpoint-decision` (or the real UI) and watch the same runner process
-resume in the same window.
+To reproduce the HYB-5 scale/performance measurement:
+```bash
+cd backend
+rm -f data/master.db && rm -rf data/projects   # fresh, never committed
+ADMIN_PASSWORD=changeme123 ./.venv/Scripts/python -m uvicorn app.main:app --port 8000
+# separate terminal:
+cd backend && ./.venv/Scripts/python scripts/hyb5_scale_fixture.py
+```
 
 ## Continuation prompt (copy-paste into a fresh session)
 
 ```
 Continue the QA-Again Hybrid MVP delivery. Read
-docs/hybrid/SESSION_HANDOFF.md in full first -- it has the exact
-current state, what HYB-1/HYB-2/HYB-3/HYB-4 completed and verified
-(including a real headed-Chromium pause/human-decision/resume run
-proving the same in-memory browser session survives a checkpoint, a
-real FAIL decision proven terminal against a racing second decision,
-and real cooperative cancellation while paused), and the precise next
-step. Branch is feature/hybrid-mvp. Do not start over or re-verify
-HYB-1/HYB-2/HYB-3/HYB-4 (already done: 69/69 backend tests, frontend
-build clean, runner typecheck clean). Begin HYB-5 (timing, reports,
-recovery, security, and handover) per docs/Autonomous hybird
-prompt.md's HYB-5 section, following the same discipline as every prior
-phase: real FastAPI/SQLite/Node.js/TypeScript/Playwright behavior only,
-no mocked output as completion evidence, full backend/frontend/runner
-gates plus real-system verification (including the threat-model
-adversarial tests and the 50+-step workflow run) before considering the
-phase done. Commit and push HYB-5 separately. Release Closure's three
-human-operated checks remain unresolved and the project remains NOT
-PRODUCTION READY regardless of hybrid progress -- do not claim
-otherwise.
+docs/hybrid/SESSION_HANDOFF.md in full first, then
+docs/hybrid/HYB5_VERIFICATION_SCOPE.md -- HYB-1 through HYB-5 are all
+complete (95/95 backend tests, frontend build clean, runner typecheck
+clean); do not redesign any of them. Two real gaps remain from HYB-5's
+own session: (1) a literal headed-Chromium Playwright run of a 50+-step
+workflow (the existing scale scenario in
+backend/scripts/hyb5_scale_fixture.py used a plain HTTP client instead
+of a real browser -- reuse its workflow/step definitions but drive them
+through runner/src/execution/executor.ts against a real target page),
+and (2) a genuine from-scratch clean-environment rehearsal (fresh
+.venv/node_modules, following SESSION_HANDOFF.md's "Exact commands to
+resume"). Do both for real, with real measurements, not mocked. Release
+Closure's three human-operated checks (real R2 staging smoke test,
+human-operated Screen Capture acceptance, human-operated clipboard-
+paste acceptance) remain unresolved regardless of hybrid progress --
+the project remains NOT PRODUCTION READY until those are run and
+recorded.
 ```

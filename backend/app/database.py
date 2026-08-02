@@ -54,6 +54,8 @@ PROJECT_COLUMN_PATCHES: dict[str, dict[str, str]] = {
         "workflow_run_id": "INTEGER",
         "workflow_step_run_id": "INTEGER",
         "checkpoint_decision_id": "INTEGER",
+        # HYB-5: server-side upload timing (read+sniff+hash+store).
+        "upload_duration_ms": "INTEGER",
     },
     # HYB-4: paused-checkpoint timestamp on existing workflow_runs rows,
     # and provenance links on existing defects rows.
@@ -105,8 +107,8 @@ PROJECT_INDEXES: dict[str, list[str]] = {
     "workflow_test_case_links": ["workflow_revision_id", "test_case_id"],
     # HYB-2: run-list/claim/step-history/event lookups.
     "workflow_runs": ["workflow_revision_id", "status", "cycle_test_result_id"],
-    "workflow_step_runs": ["workflow_run_id"],
-    "runner_execution_events": ["workflow_run_id"],
+    "workflow_step_runs": ["workflow_run_id", "workflow_step_id"],
+    "runner_execution_events": ["workflow_run_id", "event_type"],
     # HYB-3: recording-session claim/list and recorded-step ordering.
     "recording_sessions": ["workflow_id", "status"],
     "recorded_steps": ["recording_session_id"],

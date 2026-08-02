@@ -46,6 +46,9 @@ export default function Layout() {
             <NavLink to={`/${slug}/workflows`} className={tabClass}>
               Workflows
             </NavLink>
+            <NavLink to={`/${slug}/hybrid-reports`} className={tabClass}>
+              Hybrid Reports
+            </NavLink>
           </nav>
           <UserBadge />
         </div>

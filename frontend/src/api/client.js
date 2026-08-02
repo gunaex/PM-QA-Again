@@ -175,6 +175,21 @@ export const getSignoffSummary = (slug, cycleId) =>
   api.get(`/${slug}/reports/signoff-summary`, { params: { cycle_id: cycleId } }).then((r) => r.data)
 export const getStorageUsageReport = (slug) => api.get(`/${slug}/reports/storage-usage`).then((r) => r.data)
 
+// Hybrid dashboard/reports/timing (HYB-5) — never touches the Track A
+// endpoints above; separate prefix, separate formulas.
+export const getHybridDashboard = (slug) => api.get(`/${slug}/hybrid-reports/dashboard`).then((r) => r.data)
+export const getHybridLocatorFailures = (slug) => api.get(`/${slug}/hybrid-reports/locator-failures`).then((r) => r.data)
+export const getHybridFailureCategories = (slug) => api.get(`/${slug}/hybrid-reports/failure-categories`).then((r) => r.data)
+export const getHybridFrequentFailures = (slug) => api.get(`/${slug}/hybrid-reports/workflows-frequent-failures`).then((r) => r.data)
+export const getHybridSlowestSteps = (slug) => api.get(`/${slug}/hybrid-reports/slowest-steps`).then((r) => r.data)
+export const getRunTiming = (slug, runId) => api.get(`/${slug}/hybrid-reports/timing/runs/${runId}`).then((r) => r.data)
+export const getRunDurationTrend = (slug, workflowId, limit = 50) =>
+  api.get(`/${slug}/hybrid-reports/timing/run-trend`, { params: { workflow_id: workflowId, limit } }).then((r) => r.data)
+export const getStepDurationTrend = (slug, workflowId, stepDescription, limit = 50) =>
+  api
+    .get(`/${slug}/hybrid-reports/timing/step-trend`, { params: { workflow_id: workflowId, step_description: stepDescription, limit } })
+    .then((r) => r.data)
+
 // Defects
 export const listDefects = (slug, cycleId) => api.get(`/${slug}/defects`, { params: { cycle_id: cycleId } }).then((r) => r.data)
 export const createDefect = (slug, payload) => api.post(`/${slug}/defects`, payload).then((r) => r.data)

@@ -13,7 +13,7 @@ import openpyxl
 from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.utils import get_column_letter
 
-from . import models
+from . import models, hybrid_timing
 from .metrics import result_counts, pass_rate, evidence_completeness
 
 
@@ -255,7 +255,163 @@ def build_workbook(db, project: models.Project, cycle: models.TestCycle, generat
         _append(ws, [s.signoff_type, s.decision, s.actor, s.acted_at.strftime("%Y-%m-%d %H:%M:%S"), s.comment_md])
     _autosize(ws)
 
+    # ---------- HYB-5: hybrid sheets ----------
+    # Scoped to this same cycle: every WorkflowRun whose cycle_test_result_id
+    # points at a CycleTestResult belonging to this cycle. A standalone
+    # workflow run (no cycle_test_result_id) never appears in a per-cycle
+    # export -- there is no cycle to attribute it to -- matching the exact
+    # scoping the other 7 sheets already use.
+    _add_hybrid_sheets(wb, db, cycle)
+
     return wb
+
+
+def _add_hybrid_sheets(wb: openpyxl.Workbook, db, cycle: models.TestCycle) -> None:
+    result_ids = [r.id for r in db.query(models.CycleTestResult.id).filter(models.CycleTestResult.cycle_id == cycle.id).all()]
+    runs = (
+        db.query(models.WorkflowRun)
+        .filter(models.WorkflowRun.cycle_test_result_id.in_(result_ids) if result_ids else False)
+        .order_by(models.WorkflowRun.created_at)
+        .all()
+    )
+    revision_ids = sorted({r.workflow_revision_id for r in runs})
+    revisions = db.query(models.WorkflowRevision).filter(models.WorkflowRevision.id.in_(revision_ids)).all() if revision_ids else []
+    workflow_ids = sorted({r.workflow_id for r in revisions})
+    workflows = db.query(models.WorkflowDefinition).filter(models.WorkflowDefinition.id.in_(workflow_ids)).all() if workflow_ids else []
+    workflow_by_id = {w.id: w for w in workflows}
+    revision_by_id = {r.id: r for r in revisions}
+    steps = (
+        db.query(models.WorkflowStep).filter(models.WorkflowStep.revision_id.in_(revision_ids)).order_by(models.WorkflowStep.revision_id, models.WorkflowStep.sequence_no).all()
+        if revision_ids
+        else []
+    )
+    run_ids = [r.id for r in runs]
+
+    def _fmt(dt):
+        return dt.strftime("%Y-%m-%d %H:%M:%S") if dt else None
+
+    # ---------- Workflow Definitions ----------
+    ws = wb.create_sheet("Workflow Definitions")
+    _append(ws, ["Workflow ID", "Name", "Description", "Status", "Created By", "Created At"])
+    for w in workflows:
+        _append(ws, [w.id, w.name, w.description, w.status, w.created_by, _fmt(w.created_at)])
+    _autosize(ws)
+
+    # ---------- Workflow Revisions ----------
+    ws = wb.create_sheet("Workflow Revisions")
+    _append(ws, ["Revision ID", "Workflow ID", "Workflow Name", "Revision Label", "Status", "Published By", "Published At"])
+    for r in revisions:
+        wf = workflow_by_id.get(r.workflow_id)
+        _append(ws, [r.id, r.workflow_id, wf.name if wf else None, r.revision_label, r.status, r.published_by, _fmt(r.published_at)])
+    _autosize(ws)
+
+    # ---------- Workflow Steps ----------
+    ws = wb.create_sheet("Workflow Steps")
+    _append(ws, ["Step ID", "Revision ID", "Sequence", "Step Type", "Description", "Locator Strategy", "Locator Value", "Is Sensitive", "Evidence Policy"])
+    for s in steps:
+        _append(ws, [s.id, s.revision_id, s.sequence_no, s.step_type, s.description, s.locator_strategy, s.locator_value, s.is_sensitive, s.evidence_policy])
+    _autosize(ws)
+
+    # ---------- Workflow Runs ----------
+    ws = wb.create_sheet("Workflow Runs")
+    _append(
+        ws,
+        [
+            "Run ID", "Workflow Name", "Revision Label", "Status", "Runner ID", "Cycle Test Result ID",
+            "Queued By", "Created At", "Started At", "Ended At", "Result Summary",
+        ],
+    )
+    for r in runs:
+        rev = revision_by_id.get(r.workflow_revision_id)
+        wf = workflow_by_id.get(rev.workflow_id) if rev else None
+        _append(
+            ws,
+            [
+                r.id, wf.name if wf else None, rev.revision_label if rev else None, r.status, r.runner_id,
+                r.cycle_test_result_id, r.queued_by, _fmt(r.created_at), _fmt(r.started_at), _fmt(r.ended_at), r.result_summary,
+            ],
+        )
+    _autosize(ws)
+
+    # ---------- Step Results ----------
+    ws = wb.create_sheet("Step Results")
+    _append(
+        ws,
+        [
+            "Step Run ID", "Run ID", "Step ID", "Step Description", "Step Type", "Sequence", "Attempt",
+            "Status", "Failure Category", "Locator Used", "Started At", "Ended At", "Duration (s)",
+        ],
+    )
+    step_runs = db.query(models.WorkflowStepRun).filter(models.WorkflowStepRun.workflow_run_id.in_(run_ids)).order_by(models.WorkflowStepRun.workflow_run_id, models.WorkflowStepRun.sequence_no).all() if run_ids else []
+    step_by_id = {s.id: s for s in steps}
+    for sr in step_runs:
+        step = step_by_id.get(sr.workflow_step_id)
+        duration = (sr.ended_at - sr.started_at).total_seconds() if sr.started_at and sr.ended_at else None
+        _append(
+            ws,
+            [
+                sr.id, sr.workflow_run_id, sr.workflow_step_id, step.description if step else None, step.step_type if step else None,
+                sr.sequence_no, sr.attempt_number, sr.status, sr.failure_category, sr.locator_used_json,
+                _fmt(sr.started_at), _fmt(sr.ended_at), round(duration, 3) if duration is not None else None,
+            ],
+        )
+    _autosize(ws)
+
+    # ---------- Checkpoint Decisions ----------
+    ws = wb.create_sheet("Checkpoint Decisions")
+    _append(
+        ws,
+        [
+            "Decision ID", "Run ID", "Step ID", "Decision Revision", "Status", "Actual Result", "Reason",
+            "Decided By Email", "Decided At", "Source", "Resume Authorized", "Review Status",
+        ],
+    )
+    decisions = (
+        db.query(models.WorkflowCheckpointDecision).filter(models.WorkflowCheckpointDecision.workflow_run_id.in_(run_ids)).order_by(models.WorkflowCheckpointDecision.workflow_run_id, models.WorkflowCheckpointDecision.id).all()
+        if run_ids
+        else []
+    )
+    for d in decisions:
+        _append(
+            ws,
+            [
+                d.id, d.workflow_run_id, d.workflow_step_id, d.decision_revision_no, d.status, d.actual_result_md, d.reason,
+                d.decided_by_email, _fmt(d.decided_at), d.source, d.resume_authorized, d.review_status,
+            ],
+        )
+    _autosize(ws)
+
+    # ---------- Runner Activity ----------
+    ws = wb.create_sheet("Runner Activity")
+    _append(ws, ["Event ID", "Run ID", "Event Type", "Actor Type", "Created At"])
+    events = (
+        db.query(models.RunnerExecutionEvent).filter(models.RunnerExecutionEvent.workflow_run_id.in_(run_ids)).order_by(models.RunnerExecutionEvent.workflow_run_id, models.RunnerExecutionEvent.id).all()
+        if run_ids
+        else []
+    )
+    for e in events:
+        _append(ws, [e.id, e.workflow_run_id, e.event_type, e.actor_type, _fmt(e.created_at)])
+    _autosize(ws)
+
+    # ---------- Timing Trends ----------
+    ws = wb.create_sheet("Timing Trends")
+    _append(
+        ws,
+        [
+            "Run ID", "Queue Delay (s)", "Browser Startup (s)", "Total Run Duration (s)",
+            "Execution Duration (s)", "Application Steps Total (s)", "Manual Waiting Total (s)",
+        ],
+    )
+    for r in runs:
+        t = hybrid_timing.run_timing(db, r)
+        _append(
+            ws,
+            [
+                r.id, t["queue_delay_seconds"], t["browser_startup_seconds"], t["total_run_duration_seconds"],
+                t["execution_duration_seconds"], t["total_application_step_seconds"], t["total_manual_waiting_seconds"],
+            ],
+        )
+    _autosize(ws)
 
 
 def _callout_summary(db, evidence_items: list[models.EvidenceItem]) -> str:

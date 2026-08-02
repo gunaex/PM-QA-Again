@@ -273,6 +273,12 @@ class EvidenceItem(ProjectBase):
     # checkpoint-decision model exists to reference.
     workflow_run_id = Column(Integer, nullable=True)
     workflow_step_run_id = Column(Integer, nullable=True)
+    # HYB-5: server-side timing of this upload's own read+sniff+hash+store
+    # work (not client network transfer time — the server never sees the
+    # client's own upload-start moment). Null for every pre-HYB-5 row and
+    # for Track A's own tester-driven upload endpoint (evidence.py), which
+    # does not measure this.
+    upload_duration_ms = Column(Integer, nullable=True)
     # HYB-4: set (server-side, never client-supplied) when a reviewer
     # attaches this evidence to a specific checkpoint decision at
     # decision-submission time -- the column the HYB-1 gap-analysis

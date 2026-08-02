@@ -98,7 +98,9 @@ def test_excel_export_sheet_names_and_content(auth_client, full_cycle):
     assert r.headers["content-type"] == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
     wb = openpyxl.load_workbook(io.BytesIO(r.content))
-    assert wb.sheetnames == [
+    # The original 7 Track A sheets, in their original order, must never
+    # move or disappear -- HYB-5 only ever appends hybrid sheets after them.
+    assert wb.sheetnames[:7] == [
         "00_Cover",
         "01_Execution_Summary",
         "02_Test_Results",
@@ -106,6 +108,16 @@ def test_excel_export_sheet_names_and_content(auth_client, full_cycle):
         "04_Evidence_Index",
         "05_Revision_History",
         "06_Sign_Off",
+    ]
+    assert wb.sheetnames[7:] == [
+        "Workflow Definitions",
+        "Workflow Revisions",
+        "Workflow Steps",
+        "Workflow Runs",
+        "Step Results",
+        "Checkpoint Decisions",
+        "Runner Activity",
+        "Timing Trends",
     ]
 
     results_sheet = wb["02_Test_Results"]

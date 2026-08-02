@@ -304,7 +304,7 @@ proceed on a dedicated `feature/hybrid-mvp` branch while Release Closure
 remains open. Production readiness is **not** claimed regardless of how
 much HYB work completes; see Track B below for HYB-1's actual status.
 
-## Track B — Hybrid manual+automation expansion (HYB-0–HYB-4 complete; HYB-5 pending)
+## Track B — Hybrid manual+automation expansion (HYB-0–HYB-5 complete)
 
 Full detail lives in `QA_AGAIN_HYBRID_AI_QA_MVP_EXPANSION.md`; this is
 the index. QA-Again gains a separate **QA Runner** (Node.js + Playwright,
@@ -721,10 +721,146 @@ Delivery sequence after the spike:
   afterward. Confirmed no secret values or unrelated local artifacts
   were committed (`runner/.env`, used only for this verification, is
   gitignored and was deleted afterward).
-- **HYB-5** — timing, reports, hardening (per-step timing history,
-  hybrid execution report, machine-vs-human provenance, export updates,
-  `docs/HYBRID_RUNNER_THREAT_MODEL.md`, recovery/retry rules, operator
-  and tester guides).
+- **HYB-5** — timing, reports, recovery, security, and handover.
+  **Done, 2026-08-02** — branch `feature/hybrid-mvp`. Builds entirely on
+  top of HYB-1–HYB-4's existing raw timestamps/events; no HYB-1–HYB-4
+  behavior was redesigned.
+
+  **Timing** (`backend/app/hybrid_timing.py`, new, read-only/derived):
+  queue delay, runner claim delay, browser-startup duration, per-step
+  duration + retry/attempt timing, checkpoint-entered time, checkpoint
+  waiting duration, human decision time, resume delay, total run
+  duration are all *derived* from existing `WorkflowRun`/
+  `WorkflowStepRun`/`RunnerExecutionEvent`/`WorkflowCheckpointDecision`
+  timestamps — no schema change needed for any of those. The one new
+  raw measurement is `EvidenceItem.upload_duration_ms` (additive
+  nullable column), timing the upload endpoint's own server-side
+  read+sniff+hash+store work. Historical runs are never overwritten —
+  every timing function only reads. `run_duration_trend()`/
+  `step_duration_trend()` give the "Save Customer: Run 1 1.2s, Run 2
+  1.5s, Run 3 2.8s" trend view the spec asked for, oldest-run-first,
+  matched by exact step description within a workflow (documented
+  limitation: no stable logical-step key survives a step rename across
+  revisions yet). The four buckets (application/queue-and-runner/
+  manual-waiting/infrastructure) are kept structurally distinct rather
+  than merged into one number, per the spec's explicit requirement.
+
+  **Hybrid dashboard/reports** (`backend/app/hybrid_metrics.py`,
+  `backend/app/routers/hybrid_reports.py`, new — separate prefix
+  `/api/{slug}/hybrid-reports`, never touches Track A's own
+  `dashboard.py`/`reports.py`): run-status counts, machine-step-outcome
+  counts, human-checkpoint-decision counts kept in disjoint sets (a
+  `WorkflowStepRun` is never counted as a decision and vice versa — the
+  dashboard's own `provenance` key states this explicitly), locator
+  failure frequency, failure-category breakdown, runner reliability
+  (joined against master-DB `runner_tokens`), retry frequency,
+  runner-lost frequency, checkpoint-waiting summary, evidence
+  completeness, defect linkage, workflows with frequent failures,
+  slowest steps, recent activity (capped at 30, never the full event
+  log). Every aggregate function's docstring states its denominator
+  explicitly per the spec's requirement. All grouped `SELECT ... GROUP
+  BY` aggregates — no N+1 per-row follow-up queries; new indexes added
+  on `workflow_step_runs.workflow_step_id` and
+  `runner_execution_events.event_type` to keep the grouped queries this
+  adds off full table scans. New frontend page
+  `frontend/src/pages/HybridReportsPage.jsx` (separate "Hybrid Reports"
+  nav tab, never touches the existing Reports page).
+
+  **Excel export** (`backend/app/report_excel.py`, additive): the
+  original 7 Track A sheets/columns are completely unchanged and stay
+  first in the workbook; 8 new sheets are appended (`Workflow
+  Definitions`, `Workflow Revisions`, `Workflow Steps`, `Workflow Runs`,
+  `Step Results`, `Checkpoint Decisions`, `Runner Activity`, `Timing
+  Trends`), scoped to the same cycle the export is already for (every
+  `WorkflowRun` whose `cycle_test_result_id` belongs to that cycle) —
+  same scoping discipline as the other 7 sheets, no new cross-cycle leak
+  surface. Existing XML-illegal-character sanitization (`_clean_cell`)
+  applies unchanged to every new sheet's cells.
+
+  **ZIP export** (`backend/app/report_zip.py`, additive): `manifest.json`
+  gained a `hybrid` section linking workflow → revision → step → run →
+  step-run → checkpoint decision by id, each carrying its own
+  timestamps/durations (reusing `hybrid_timing.run_timing()`) and
+  status. Every evidence entry (Track A and hybrid alike) now carries
+  `workflow_run_id`/`workflow_step_run_id`/`checkpoint_decision_id`/
+  `defect_key` cross-reference fields and a new `checksum_verified`
+  field — **every included file's SHA-256 is now verified against its
+  recorded `original_sha256` before being written into the archive**; a
+  mismatch is treated exactly like a missing object (excluded, flagged),
+  never silently packaged. `_safe_slug()`'s existing path-traversal/
+  filename-injection protection is unchanged and covers hybrid entries
+  identically (verified against a deliberately malicious
+  `checkpoint_code`). Presigned URLs are still never substituted for
+  real bytes.
+
+  **Recovery/operational tooling**: no new subsystem needed for most of
+  the spec's list — HYB-2's lazy lease-expiry sweep, HYB-4's paused
+  lease, and the existing idempotency-key/decision-conflict CAS already
+  honestly cover stale runners, expired leases, runner-lost-before/
+  during/while-paused, duplicate claims/events/decisions, and
+  cancellation. HYB-5 adds one new operator affordance
+  (`GET /workflow-runs?status=...` filter, for "find stuck runs") and
+  writes the full procedure down in
+  [docs/hybrid/RECOVERY_RUNBOOK.md](hybrid/RECOVERY_RUNBOOK.md) plus
+  [docs/hybrid/RUNNER_CREDENTIAL_ROTATION.md](hybrid/RUNNER_CREDENTIAL_ROTATION.md).
+  Server-restart/Chromium-crash/evidence-reconciliation/orphaned-object
+  handling are all documented as relying on existing Track A/HYB-2/HYB-4
+  mechanisms rather than new ones, with the exact reasoning for why no
+  new code was needed.
+
+  **Threat model + security tests**:
+  [docs/HYBRID_RUNNER_THREAT_MODEL.md](../HYBRID_RUNNER_THREAT_MODEL.md)
+  (new) covers all of the spec's listed threats, each backed by a named
+  automated test — not narrative alone. 17 new tests in
+  `backend/tests/test_hybrid_security.py` cover runner registration
+  authorization, revocation-checked-everywhere, garbage/missing tokens,
+  a **documented** cross-project-runner-access trust boundary (see
+  below), invalid lease ownership, replayed events, duplicate claims,
+  invalid state transitions (resume without waiting, decision without
+  waiting), the human/runner actor-type boundary in both directions,
+  server-derived decision identity (rejects client-supplied
+  `decided_by_*`), human-FAIL-is-terminal-against-a-racing-decision,
+  sensitive-variable placeholder enforcement, malicious ZIP filenames,
+  and the CSRF/CORS boundary extended to hybrid endpoints. Also adds
+  rate limiting (120/min heartbeat, 300/min events) addressing the
+  heartbeat/event-flood DoS item.
+
+  **Cross-project runner access — investigated, found to be a
+  pre-existing, honestly-documented property, not fixed as a new
+  feature**: `RunnerToken` has no `project_id` (master DB, global),
+  identical to every human `User` row — this app has never had a
+  per-project membership model for *any* actor. HYB-5 did not invent
+  per-project ACLs (a much larger change touching every router) to
+  narrow this; instead it makes the existing behavior an explicit,
+  tested fact (§4 of the threat model) with a documented deployment
+  implication (single-organization internal use only).
+
+  **Scale/performance**: a real 60-step, 2-revision, 4-run (one
+  all-PASS with 3 real checkpoint decisions, one real ~3s checkpoint
+  pause, one with repeated real `LOCATOR_NOT_FOUND` retries + a linked
+  defect, one real `RUNNER_LOST`) fixture was built and measured against
+  a real running `uvicorn` process — see
+  [docs/hybrid/HYB5_SCALE_PERFORMANCE.md](hybrid/HYB5_SCALE_PERFORMANCE.md).
+  Every measured endpoint (workflow/run list, run detail, hybrid
+  dashboard, every hybrid report, run timing, trends, Excel export, ZIP
+  export) stayed under 100ms.
+
+  **Verification gate**: full backend pytest **95/95** (69 existing +
+  23 new + 3 modified for the new sheet-count assertion), frontend
+  build clean, runner `tsc --noEmit` clean.
+
+  **Explicitly NOT done this session** (see
+  [docs/hybrid/HYB5_VERIFICATION_SCOPE.md](hybrid/HYB5_VERIFICATION_SCOPE.md)
+  for the full, honest accounting): a literal headed-Chromium run of the
+  60-step fixture (the scale scenario used a real HTTP runner-token
+  client instead — every backend code path a real runner exercises was
+  exercised for real, but not through an actual Playwright browser at
+  this scale) and a from-scratch clean-environment rehearsal (fresh
+  `.venv`/`node_modules` from zero). Both are flagged as the recommended
+  next session's starting point rather than silently skipped or
+  fabricated. Release Closure's three human-operated checks remain
+  untouched and unresolved — the project remains **NOT PRODUCTION
+  READY**.
 
 Explicit non-goals for the hybrid MVP (hybrid doc section 13): full
 load/stress/soak testing, mobile/desktop app automation, continuous

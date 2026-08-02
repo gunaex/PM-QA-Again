@@ -8,6 +8,7 @@ import RevisionDetail from './pages/RevisionDetail.jsx'
 import CycleList from './pages/CycleList.jsx'
 import CycleExecution from './pages/CycleExecution.jsx'
 import ReportsPage from './pages/ReportsPage.jsx'
+import HybridReportsPage from './pages/HybridReportsPage.jsx'
 import WorkflowList from './pages/WorkflowList.jsx'
 import WorkflowDetail from './pages/WorkflowDetail.jsx'
 import RunnerList from './pages/RunnerList.jsx'
@@ -50,6 +51,7 @@ function App() {
         <Route path="cycles" element={<CycleList />} />
         <Route path="cycles/:cycleId" element={<CycleExecution />} />
         <Route path="reports" element={<ReportsPage />} />
+        <Route path="hybrid-reports" element={<HybridReportsPage />} />
         <Route path="workflows" element={<WorkflowList />} />
         <Route path="workflows/:workflowId" element={<WorkflowDetail />} />
       </Route>
