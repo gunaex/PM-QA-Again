@@ -1,7 +1,7 @@
-# Session Handoff — HYB-5 complete
+# Session Handoff — HYB-5 complete + verification/deployment-readiness session
 
 Written 2026-08-02. Supersedes the previous version of this file
-(written after HYB-4).
+(written after HYB-5's implementation, before this verification pass).
 
 ## Current state
 
@@ -10,106 +10,101 @@ Written 2026-08-02. Supersedes the previous version of this file
 - **HYB-2 commit**: `0071a23`
 - **HYB-3 commit**: `6c4a3f1`
 - **HYB-4 commit**: `acbe56e`
-- **HYB-5 commit**: `b7f9dc2` (pushed to `origin/feature/hybrid-mvp`).
-- **`main`** is at `bb2f539` — unaffected; all hybrid work lives only on
-  `feature/hybrid-mvp`.
-- **`track-a-baseline` tag**: `bb2f539`.
+- **HYB-5 commit**: `b7f9dc2` / `4564cda` (pushed to `origin/feature/hybrid-mvp`).
+- **This verification/deployment-readiness session's commit**: see the
+  commit this file was last updated alongside (recorded in the commit
+  message and the final report).
+- **`main`** is at `bb2f539` — unaffected. `git merge-base --is-ancestor
+  main feature/hybrid-mvp` confirms `main` has **not diverged** — the
+  eventual merge to `main` is a plain fast-forward, no conflicts.
 
-## HYB-1 through HYB-4 — complete, unchanged, not redesigned this session
+## HYB-1 through HYB-5 — complete, unchanged, not redesigned this session
 
-See prior handoff content preserved in git history and
-`docs/ROADMAP.md`'s HYB-1–HYB-4 entries. Not touched this session beyond
-reading them for context.
+See `docs/ROADMAP.md`'s HYB-1–HYB-5 entries. This session did only
+verification, documentation, and deployment-readiness work — no
+application code redesign.
 
-## HYB-5 — complete this session
+## This session's work: closing HYB-5's two verification gaps + release-readiness prep
 
-Full detail lives in `docs/ROADMAP.md`'s HYB-5 entry (file-by-file) and
-these dedicated documents:
+Everything in the previous handoff's "explicitly not done" list is now
+done for real:
 
-- [`docs/HYBRID_RUNNER_THREAT_MODEL.md`](../HYBRID_RUNNER_THREAT_MODEL.md)
-  — full threat coverage, each claim backed by a named test.
-- [`docs/hybrid/RECOVERY_RUNBOOK.md`](RECOVERY_RUNBOOK.md) — every
-  recovery scenario the spec listed.
-- [`docs/hybrid/RUNNER_CREDENTIAL_ROTATION.md`](RUNNER_CREDENTIAL_ROTATION.md)
-- [`docs/hybrid/HYBRID_GUIDES.md`](HYBRID_GUIDES.md) — architecture
-  overview + workflow-author/recorder/tester/checkpoint-reviewer/runner-
-  installation/runner-operator/reporting-export guides, consolidated
-  into one document (a deliberate, documented scope decision).
-- [`docs/hybrid/HYB5_SCALE_PERFORMANCE.md`](HYB5_SCALE_PERFORMANCE.md)
-  — real 60-step/2-revision/4-run measurement.
-- [`docs/hybrid/HYB5_VERIFICATION_SCOPE.md`](HYB5_VERIFICATION_SCOPE.md)
-  — **read this one first if continuing** — the exact honest accounting
-  of what was and wasn't verified for real this session.
+1. **Real headed-Chromium 72-step run** (exceeds the 50+ requirement),
+   including semantic navigate/click/fill/select/check steps, sensitive-
+   variable injection, assertions, screenshots, a real
+   `MANUAL_CHECKPOINT` pause + real human decision + real same-session
+   resume, and a genuine deliberate failure followed by a genuine
+   retry-after-fix that passed. Full record:
+   [`docs/hybrid/HYB5_REAL_BROWSER_VERIFICATION.md`](HYB5_REAL_BROWSER_VERIFICATION.md).
+2. **Genuine clean-environment rehearsal**: fresh `backend/.venv`,
+   fresh `frontend`/`runner` `node_modules`, fresh SQLite, full
+   functional walkthrough (bootstrap admin → Track A suite/cycle/
+   evidence/PASS → hybrid workflow → real runner → checkpoint/decision/
+   resume/complete → dashboard/reports → Excel/ZIP download+validation
+   → **Track A confirmed working with zero runner processes running**).
+   Full record: [`docs/hybrid/HYB5_CLEAN_REHEARSAL.md`](HYB5_CLEAN_REHEARSAL.md).
 
-**Summary**: timing derivation (`backend/app/hybrid_timing.py`) reads
-existing HYB-2/HYB-4 timestamps/events — no schema change needed except
-one additive nullable column (`EvidenceItem.upload_duration_ms`).
-Hybrid dashboard/reports (`backend/app/hybrid_metrics.py`,
-`backend/app/routers/hybrid_reports.py`, new `/hybrid-reports` prefix,
-new frontend page) never touch Track A's own dashboard/reports.
-Excel export gained 8 new hybrid sheets appended after the original 7
-Track A sheets (unchanged). ZIP export's manifest gained a `hybrid`
-section linking every entity by id, plus checksum verification on every
-packaged evidence file. A full adversarial security test suite (17
-tests, `backend/tests/test_hybrid_security.py`) backs the new threat
-model doc — including a **documented, not newly-introduced**
-cross-project-runner-access trust boundary (RunnerToken has always been
-a global credential, same as every human user; HYB-5 made this an
-explicit tested fact rather than silently changing or ignoring it).
-Recovery/credential-rotation are mostly "already handled, now written
-down" — the lease-expiry sweep, decision-conflict CAS, and idempotency
-keys already built in HYB-2/HYB-4 cover almost every scenario the spec
-listed; one new operator affordance (`GET /workflow-runs?status=...`
-filter) was added.
+Plus release-readiness work:
 
-**Verification gate this session**: full backend pytest **95/95**
-(69 existing + 23 new + 3 modified assertions), frontend build clean,
-runner `tsc --noEmit` clean. A real 60-step/2-revision/4-run/3-checkpoint
-scale scenario ran against a real `uvicorn` process with real SQLite and
-real filesystem `EvidenceStorage`, driven by a real `X-Runner-Token`-
-authenticated HTTP client exercising every backend code path a real
-runner uses — full measurements in `HYB5_SCALE_PERFORMANCE.md`.
+3. **Real Cloudflare R2 staging smoke test result recorded** — the
+   human operator ran it and it **PASSED**. Recorded in
+   `docs/RELEASE_CHECKLIST.md` (item #1, now 🟢), `docs/RELEASE_REHEARSAL.md`,
+   and `docs/RELEASE_CLOSURE.md`. Items #2 (Screen Capture acceptance)
+   and #3 (clipboard-paste acceptance) remain 🔴 **BLOCKED** — not
+   touched this session, still require a human operator in a real
+   browser.
+4. **RunnerToken internal-MVP release decision formally recorded** in
+   `docs/HYBRID_RUNNER_THREAT_MODEL.md` §4 and `docs/HANDOVER.md` §4 —
+   the global (not per-project) runner-token scope is explicitly
+   accepted for internal MVP deployment only, under documented controls,
+   with a post-MVP backlog item for project-scoped credentials and an
+   explicit statement that public/multi-tenant deployment remains
+   blocked until that exists.
+5. **Merge/deployment readiness prepared** (not executed):
+   `docs/hybrid/PRODUCTION_DEPLOYMENT_RUNBOOK.md`,
+   `docs/hybrid/POST_DEPLOYMENT_SMOKE_TEST.md`,
+   `docs/hybrid/ROLLBACK_CHECKLIST.md`. Exact merge command:
+   `git checkout main && git merge --ff-only feature/hybrid-mvp`. Exact
+   rollback commands are in the rollback checklist (Fly `fly releases
+   rollback`, Cloudflare Pages dashboard rollback).
+6. A **real gitignore gap was found and fixed** during this session:
+   `backend/.gitignore` was missing `data/evidence/` (the real evidence
+   storage path), meaning real screenshot bytes from the headed-browser
+   run in item 1 briefly showed as untracked. Added to `.gitignore`;
+   confirmed nothing from `backend/data/` is staged in this session's
+   commit.
 
-**Explicitly not done this session** (see `HYB5_VERIFICATION_SCOPE.md`
-for the full accounting — stated here so it can't be missed):
-1. A literal headed-Chromium Playwright run of the 60-step fixture
-   (the scale scenario used a plain HTTP client presenting a real
-   runner token instead of an actual browser process).
-2. A from-scratch clean-environment rehearsal (fresh `.venv`/
-   `node_modules` from zero) — this session reused the already-installed
-   dependencies from the existing checkout.
-
-Both are real gaps, not fabricated as done. Recommended as the very
-next session's starting point.
+**Verification gate this session**: full backend pytest **95/95** (cold,
+fresh venv), frontend build clean (fresh `node_modules`), runner
+`tsc --noEmit` clean (fresh `node_modules`) — see
+`docs/hybrid/HYB5_CLEAN_REHEARSAL.md` for the exact cold-run output.
 
 ## Current in-progress phase
 
-**None.** HYB-5 is the last planned phase in
-`docs/Autonomous hybird prompt.md`'s scope. What remains before any
-production-readiness claim is Release Closure's three human-operated
-checks (unchanged by any hybrid work, see below) plus the two
-verification gaps above if a fuller confidence level is wanted before
-relying on this at 50+-step real-browser scale.
+**None** on the engineering side. Every HYB-5 verification gap and
+every piece of merge/deployment-readiness prep is complete.
 
 ## Why stopped here
 
-HYB-5's own scope (13 sections in the source prompt) is now fully
-implemented and gated by a passing test suite, a real (if HTTP-client-
-driven rather than full-browser) scale scenario, and complete
-documentation. The two items in "explicitly not done" are the honest
-boundary of this session's real, verified work — continuing to claim
-more without actually running a real headed-browser 50+-step session or
-a real clean-environment install would cross into exactly the kind of
-fabricated completion evidence this delivery has avoided at every prior
-phase boundary.
+All engineering-side work that does not require a human operator is
+done: HYB-5's implementation, both of its verification gaps, and
+merge/deployment readiness. What remains is exclusively the two
+outstanding Release Closure human-operated checks (Screen Capture API
+acceptance, clipboard-paste acceptance) — these cannot be completed by
+an automated session by design (they need a real human at a real
+browser with real OS-level permission prompts). Per explicit
+instruction, **do not merge to `main` or deploy until the operator
+reports both as passed.**
 
 ## Release status
 
-**NOT PRODUCTION READY.** Unchanged by HYB-5. The three Release Closure
-blockers (real Cloudflare R2 staging smoke test, human-operated Screen
-Capture API acceptance, human-operated clipboard-image paste acceptance)
-remain unresolved and untouched by any hybrid work, HYB-0 through
-HYB-5.
+**INTERNAL PRODUCTION MVP READY — AWAITING HUMAN CHECK RESULTS.**
+
+One of three Release Closure blockers is closed (R2 staging smoke
+test, PASS). Two remain: Screen Capture API acceptance, clipboard-paste
+acceptance. The project remains **NOT PRODUCTION READY** until both are
+reported and recorded — do not merge to `main` or deploy in the
+meantime.
 
 ## Exact commands to resume
 
@@ -117,7 +112,7 @@ HYB-5.
 cd d:/git/PM-QA-Again
 git checkout feature/hybrid-mvp
 git pull origin feature/hybrid-mvp
-git log --oneline -6   # confirm HYB-5's commit is at or near HEAD
+git log --oneline -8
 
 # Backend
 cd backend
@@ -132,34 +127,38 @@ cd ../runner
 npm run typecheck   # expect clean
 ```
 
-To reproduce the HYB-5 scale/performance measurement:
-```bash
-cd backend
-rm -f data/master.db && rm -rf data/projects   # fresh, never committed
-ADMIN_PASSWORD=changeme123 ./.venv/Scripts/python -m uvicorn app.main:app --port 8000
-# separate terminal:
-cd backend && ./.venv/Scripts/python scripts/hyb5_scale_fixture.py
-```
+## When the operator reports the two remaining checks
+
+If **both pass**: follow `docs/hybrid/PRODUCTION_DEPLOYMENT_RUNBOOK.md`
+exactly — merge to `main` (`git merge --ff-only feature/hybrid-mvp`),
+tag (`internal-mvp-v1.0.0`), deploy backend (Fly.io) and frontend
+(Cloudflare Pages), run every item in
+`docs/hybrid/POST_DEPLOYMENT_SMOKE_TEST.md`, then report final status
+**INTERNAL PRODUCTION MVP DEPLOYED** with URLs/commit/tag/smoke results/
+rollback point.
+
+If **either fails**: do not merge or deploy. Report the exact failure,
+fix only the demonstrated release blocker, re-run the affected check
+and the full gate list, then report **NOT READY — RELEASE BLOCKER
+REMAINS** with the specific blocker named.
 
 ## Continuation prompt (copy-paste into a fresh session)
 
 ```
 Continue the QA-Again Hybrid MVP delivery. Read
-docs/hybrid/SESSION_HANDOFF.md in full first, then
-docs/hybrid/HYB5_VERIFICATION_SCOPE.md -- HYB-1 through HYB-5 are all
-complete (95/95 backend tests, frontend build clean, runner typecheck
-clean); do not redesign any of them. Two real gaps remain from HYB-5's
-own session: (1) a literal headed-Chromium Playwright run of a 50+-step
-workflow (the existing scale scenario in
-backend/scripts/hyb5_scale_fixture.py used a plain HTTP client instead
-of a real browser -- reuse its workflow/step definitions but drive them
-through runner/src/execution/executor.ts against a real target page),
-and (2) a genuine from-scratch clean-environment rehearsal (fresh
-.venv/node_modules, following SESSION_HANDOFF.md's "Exact commands to
-resume"). Do both for real, with real measurements, not mocked. Release
-Closure's three human-operated checks (real R2 staging smoke test,
-human-operated Screen Capture acceptance, human-operated clipboard-
-paste acceptance) remain unresolved regardless of hybrid progress --
-the project remains NOT PRODUCTION READY until those are run and
-recorded.
+docs/hybrid/SESSION_HANDOFF.md in full first. HYB-1 through HYB-5 are
+complete and fully verified (95/95 backend tests on a fresh venv,
+frontend build clean on fresh node_modules, runner typecheck clean on
+fresh node_modules, a real 72-step headed-Chromium run with checkpoint/
+resume/retry, a real clean-environment rehearsal). The real R2 staging
+smoke test has passed (human operator). Merge/deployment readiness is
+fully prepared (docs/hybrid/PRODUCTION_DEPLOYMENT_RUNBOOK.md,
+POST_DEPLOYMENT_SMOKE_TEST.md, ROLLBACK_CHECKLIST.md) but NOT executed
+-- main has not diverged, so merging is a plain fast-forward. Do not
+redesign HYB-1-HYB-5. The only remaining blockers are two human-
+operated checks: Screen Capture API acceptance and clipboard-paste
+acceptance (docs/RELEASE_CLOSURE.md §2/§3). If the operator has since
+reported both as passed, follow the exact merge/deploy runbook and
+report INTERNAL PRODUCTION MVP DEPLOYED. If not, the project remains
+NOT PRODUCTION READY -- do not merge or deploy.
 ```

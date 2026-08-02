@@ -1,5 +1,75 @@
 # Release Rehearsal Record
 
+## HYB-5 clean-environment rehearsal — PASS (2026-08-02)
+
+A genuine from-scratch rehearsal, closing the gap flagged in
+`docs/hybrid/HYB5_VERIFICATION_SCOPE.md`. Full narrative in
+`docs/hybrid/HYB5_CLEAN_REHEARSAL.md` — summary here.
+
+- Fresh `backend/.venv` (old one moved aside, new one created via
+  `python -m venv`, `pip install -r requirements-dev.txt` — full
+  dependency resolution from PyPI, not reused). **95/95 backend pytest
+  passed cold.**
+- Fresh `frontend/node_modules` (`npm install` from scratch) and a
+  fresh production build (`npm run build`) — clean, no errors.
+- Fresh `runner/node_modules` (`npm install` from scratch),
+  `npx playwright install chromium` confirmed already satisfied (no
+  redownload needed — Playwright's browser cache is content-addressed
+  and independent of `node_modules`), `tsc --noEmit` clean.
+- Fresh `backend/data/` (deleted `master.db`/`projects/` before
+  starting).
+- Full functional walkthrough against the freshly-installed stack (see
+  `docs/hybrid/HYB5_CLEAN_REHEARSAL.md` for every real command/response):
+  bootstrap admin → create project → create/publish Track A suite →
+  create manual cycle → upload evidence → PASS (100% pass rate, 100%
+  evidence completeness on the dashboard) → create/publish a real
+  hybrid workflow with a `MANUAL_CHECKPOINT` → register a real runner
+  token → execute with the **real headed-Chromium runner** → real
+  checkpoint pause → real human PASS decision → real same-session
+  resume → real completion → hybrid dashboard reflects it → Excel
+  export downloaded and opened (`openpyxl`) confirming all 15 sheets
+  (7 Track A + 8 hybrid) and real Workflow Runs rows → ZIP export
+  downloaded and extracted (`zipfile`), `testzip()` passed, every
+  evidence file's real SHA-256 checksum verified against the manifest
+  by hand → **Track A execution (a second suite/cycle/evidence/PASS)
+  confirmed working with zero runner processes running** (the runner
+  had already exited after completing its one run).
+
+This closes the "from-scratch clean-environment rehearsal" gap
+previously flagged as not done. See
+`docs/hybrid/HYB5_VERIFICATION_SCOPE.md` for the updated accounting.
+
+## Real Cloudflare R2 staging smoke test — PASS (2026-08-02, human operator)
+
+Executed by the human operator against the real staging R2 bucket,
+following `docs/RELEASE_CLOSURE.md` §1:
+
+```
+cd backend
+./.venv/Scripts/python scripts/r2_staging_smoke_test.py
+```
+
+```
+1. PUT evidence/_r2-smoke-test/1785634643/smoke.png ...
+   ok
+2. HEAD (exists) ...
+   ok
+3. GET (byte-for-byte roundtrip + checksum) ...
+   ok
+4. Presigned GET URL — actually fetch it over HTTP (proves the real endpoint/signing, not just that a URL string was generated) ...
+   ok
+5. DELETE (cleanup) ...
+   ok
+
+ALL CHECKS PASSED — real R2 endpoint, credentials, upload, presigned download, and retrieval all confirmed working.
+```
+
+This resolves `docs/RELEASE_CHECKLIST.md` blocking item #1. Items #2
+(Screen Capture API acceptance) and #3 (clipboard-image paste
+acceptance) remain BLOCKED — this smoke test does not touch either of
+those code paths. The project remains **NOT PRODUCTION READY** until
+both are also completed and recorded.
+
 Executed 2026-08-01, in this Phase 7 session, in a genuinely clean
 environment (not the accumulated development database from earlier
 phases). Recorded here as the evidence for `docs/RELEASE_CHECKLIST.md`.

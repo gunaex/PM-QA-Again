@@ -1,6 +1,9 @@
 # Release Closure Procedure
 
-Status: procedure prepared, **not yet executed** — 2026-08-02.
+Status: **1 of 3 items closed** — 2026-08-02. The real Cloudflare R2
+staging smoke test (§1) has been executed by the human operator and
+passed; Screen Capture API acceptance (§2) and clipboard-paste
+acceptance (§3) remain outstanding.
 
 **2026-08-02 update**: a preview-before-upload confirmation step was
 added for Screen Capture and clipboard-paste (checks 2 and 3 below now
@@ -256,6 +259,16 @@ output. Name it `docs/release-evidence/r2-staging-<date>.txt`.
 
 Row **#1** in "Release-blocking items" (`Real Cloudflare R2 staging
 smoke test executed successfully`).
+
+**Status: 🟢 PASS, recorded 2026-08-02.** The human operator ran
+`scripts/r2_staging_smoke_test.py` (Step A) against the real staging
+bucket — all 5 steps (PUT/HEAD/GET+checksum/presigned-GET/DELETE)
+passed. See `docs/RELEASE_REHEARSAL.md` for the full output. Step B
+(the full application-level walkthrough below) was not additionally
+run since Step A already exercises the same `R2EvidenceStorage`
+methods the application layer calls — Step B remains available for
+anyone who wants the additional application-level confirmation, but is
+not required to close this item. Items #2 and #3 remain BLOCKED.
 
 ---
 

@@ -24,62 +24,52 @@ mocked or assumed results as completion evidence.
   endpoints the real Node.js runner calls — every backend code path a
   real runner exercises was exercised for real.
 
+## Update (2026-08-02, later session): the headed-Chromium gap is now closed
+
+A real headed-Chromium 72-step run (exceeding the 50+ requirement) was
+executed against the real frontend/backend, with a real `MANUAL_CHECKPOINT`
+pause, a real human PASS decision, a real same-session resume, a real
+sensitive-variable injection, a real genuine failure, and a real
+deliberate rerun-after-fix that passed. Full record:
+[HYB5_REAL_BROWSER_VERIFICATION.md](HYB5_REAL_BROWSER_VERIFICATION.md).
+This item is no longer an open gap.
+
+## Update (2026-08-02, later session): clean-environment rehearsal also closed
+
+A genuine from-scratch rehearsal (fresh `backend/.venv`, fresh
+`frontend/node_modules` + build, fresh `runner/node_modules` +
+typecheck, fresh SQLite) was performed, including the full functional
+walkthrough end to end — bootstrap admin through Excel/ZIP
+inspection and confirming Track A works with zero runner processes
+running. Full record: [HYB5_CLEAN_REHEARSAL.md](HYB5_CLEAN_REHEARSAL.md).
+This item is no longer an open gap either.
+
 ## What was NOT run for real this session (honest gap, not overclaimed)
 
-- **A literal headed-Chromium browser session against this 60-step
-  fixture.** The scale scenario above proves the backend's job
-  protocol, lease mechanics, checkpoint state machine, timing capture,
-  and reporting/export pipeline all handle 60 real steps and 3 real
-  checkpoints correctly — but it does this by having a plain HTTP client
-  play the runner's part, not by launching an actual Playwright/Chromium
-  process navigating a real target page. HYB-4's own prior session
-  (see [HYB-4-CHECKPOINTS.md](HYB-4-CHECKPOINTS.md)) already proved real
-  headed-Chromium pause/resume/FAIL/cancel end-to-end against a
-  *smaller* (2-step) workflow; HYB-5 did not repeat that with the full
-  Playwright browser at 60-step scale.
-- **A from-scratch clean-environment rehearsal** (fresh OS-level
-  `.venv`, fresh `npm install` for both frontend and runner, fresh
-  `npx playwright install chromium`, starting entirely from nothing).
-  This session reused the existing checked-out repo's dependencies
-  (already-installed `.venv`, already-installed `node_modules` for both
-  frontend and runner) rather than deleting and reinstalling everything
-  from zero.
-- **The three Release Closure human-operated checks** (real R2 staging
-  smoke test, human-operated Screen Capture API acceptance,
-  human-operated clipboard-paste acceptance) — these were never in
-  HYB-5's scope; they remain unresolved regardless of hybrid progress
-  and gate release status on their own.
+Neither of the two engineering gaps from the original version of this
+document remain open. What's left, unchanged, is exactly the same
+category of item it always was:
 
-## Why this is disclosed rather than silently skipped
-
-The user's own instructions for this delivery are explicit: "no mocked
-output as completion evidence" and "record the rehearsal in a dedicated
-document" — the honest answer here is that a full clean-environment
-rehearsal and a fresh headed-Chromium run at full 60-step scale did not
-fit in this session's scope alongside the substantial amount of new
-code, tests, and documentation HYB-5 required (timing infrastructure,
-hybrid dashboard/reports, Excel/ZIP export extension, a full threat
-model with its own adversarial test suite, recovery/credential-rotation
-guides, and this scale measurement). Recording that gap explicitly here
-is more useful to whoever picks this up next than a document that
-implies more was proven than actually was.
+- **Two of the three Release Closure human-operated checks** — the
+  real R2 staging smoke test has been run and passed by the human
+  operator (see `docs/RELEASE_REHEARSAL.md`); Screen Capture API
+  acceptance and clipboard-paste acceptance remain outstanding and
+  still gate release status on their own, regardless of hybrid or
+  verification progress. These specifically require a human at a real
+  browser with real OS-level permission prompts — no amount of
+  automated verification substitutes for them, by design.
 
 ## What this means for release status
 
-No change: this project remains **NOT PRODUCTION READY**. HYB-5's own
-completion does not (and per the user's own standing instruction,
-cannot) upgrade release status — only the three Release Closure
-human-operated checks listed above can do that, and none of them were
-touched by this work.
+No change: this project remains **NOT PRODUCTION READY**. Closing
+HYB-5's own engineering verification gaps does not (and per the user's
+own standing instruction, cannot) upgrade release status — only the
+three Release Closure human-operated checks can do that. One of three
+is now done; two remain.
 
 ## Recommended next step for whoever continues this
 
-Run the two missing pieces as their own focused session:
-1. A real headed-Chromium execution of a 50+-step workflow (can reuse
-   `backend/scripts/hyb5_scale_fixture.py`'s workflow/step definitions
-   as the target, but drive it with `runner/src/execution/executor.ts`
-   against a real target page instead of the plain HTTP client used
-   here).
-2. A genuine clean-environment rehearsal following
-   `docs/hybrid/SESSION_HANDOFF.md`'s "Exact commands to resume" section
-   from a machine/directory with no pre-existing `.venv`/`node_modules`.
+Nothing engineering-side is outstanding from HYB-5's own scope. The
+only remaining path to a production-readiness decision is the human
+operator completing Screen Capture API acceptance and clipboard-paste
+acceptance per `docs/RELEASE_CLOSURE.md` §2/§3.

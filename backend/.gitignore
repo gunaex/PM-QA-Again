@@ -5,6 +5,7 @@ __pycache__/
 data/master.db
 data/projects/*.db
 data/projects/*/
+data/evidence/
 .env
 backups/
 tests/_tmp_data/

@@ -849,18 +849,33 @@ Delivery sequence after the spike:
   23 new + 3 modified for the new sheet-count assertion), frontend
   build clean, runner `tsc --noEmit` clean.
 
-  **Explicitly NOT done this session** (see
-  [docs/hybrid/HYB5_VERIFICATION_SCOPE.md](hybrid/HYB5_VERIFICATION_SCOPE.md)
-  for the full, honest accounting): a literal headed-Chromium run of the
-  60-step fixture (the scale scenario used a real HTTP runner-token
-  client instead — every backend code path a real runner exercises was
-  exercised for real, but not through an actual Playwright browser at
-  this scale) and a from-scratch clean-environment rehearsal (fresh
-  `.venv`/`node_modules` from zero). Both are flagged as the recommended
-  next session's starting point rather than silently skipped or
-  fabricated. Release Closure's three human-operated checks remain
-  untouched and unresolved — the project remains **NOT PRODUCTION
-  READY**.
+  **Follow-up verification session (2026-08-02, same day)** closed both
+  gaps flagged above: a real headed-Chromium 72-step run (exceeding the
+  50+ requirement) with a real `MANUAL_CHECKPOINT` pause, real human
+  decision, real same-session resume, real sensitive-variable injection,
+  a real genuine failure, and a real deliberate rerun-after-fix that
+  passed — see
+  [docs/hybrid/HYB5_REAL_BROWSER_VERIFICATION.md](hybrid/HYB5_REAL_BROWSER_VERIFICATION.md).
+  A genuine from-scratch clean-environment rehearsal (fresh
+  `backend/.venv`, fresh `frontend`/`runner` `node_modules`, fresh
+  SQLite, full functional walkthrough including Track A working with
+  zero runner processes running) — see
+  [docs/hybrid/HYB5_CLEAN_REHEARSAL.md](hybrid/HYB5_CLEAN_REHEARSAL.md).
+  The same session also recorded the human operator's **real Cloudflare
+  R2 staging smoke test result (PASS)** in `docs/RELEASE_CHECKLIST.md`/
+  `docs/RELEASE_REHEARSAL.md`, formally documented the **RunnerToken
+  internal-MVP-only release decision** in
+  `docs/HYBRID_RUNNER_THREAT_MODEL.md` §4 and `docs/HANDOVER.md` §4, and
+  prepared merge/deployment readiness (`docs/hybrid/
+  PRODUCTION_DEPLOYMENT_RUNBOOK.md`, `POST_DEPLOYMENT_SMOKE_TEST.md`,
+  `ROLLBACK_CHECKLIST.md`) — `main` has not diverged from
+  `feature/hybrid-mvp`'s base, so the eventual merge is a plain
+  fast-forward, no conflict resolution needed.
+  See [docs/hybrid/HYB5_VERIFICATION_SCOPE.md](hybrid/HYB5_VERIFICATION_SCOPE.md)
+  for the full accounting. Release Closure's remaining two
+  human-operated checks (Screen Capture API acceptance, clipboard-paste
+  acceptance) are still outstanding — the project remains **NOT
+  PRODUCTION READY** until both are completed and recorded.
 
 Explicit non-goals for the hybrid MVP (hybrid doc section 13): full
 load/stress/soak testing, mobile/desktop app automation, continuous

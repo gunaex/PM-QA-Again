@@ -116,6 +116,30 @@ deployment (mutually untrusting projects) would need per-project runner
 scoping *and* per-project human membership as a related, larger change
 — out of scope for HYB-5 and not implemented.
 
+**Formal release decision (2026-08-02) — internal MVP only**: the
+global `RunnerToken` scope is explicitly, temporarily accepted for
+**INTERNAL MVP DEPLOYMENT ONLY**, under these controls:
+
+- Deployment is restricted to trusted internal users.
+- The token is stored only as a deployment secret — never in frontend
+  code, logs, documentation, or source control.
+- Runner registration and revocation are operational (`POST
+  /api/runner-tokens`, `PUT .../revoke`).
+- The credential-rotation procedure is verified (see
+  [the runner credential-rotation guide](hybrid/RUNNER_CREDENTIAL_ROTATION.md)).
+- Only approved runner machines receive credentials — token
+  distribution is a deliberate ADMIN action, not self-service.
+- A post-MVP backlog item exists for project/environment-scoped runner
+  credentials (a `project_id` column on `RunnerToken`, enforced on
+  every runner-authenticated endpoint) — tracked, not silently deferred.
+- **Public or customer-facing multi-tenant deployment remains blocked**
+  until that scoping work exists. This global-token model must never be
+  described as suitable for that use case.
+
+See also `docs/HANDOVER.md` §4 and `docs/RELEASE_CHECKLIST.md`'s
+accepted limitations for the same decision recorded from the
+handover/release-checklist perspective.
+
 ## 5. Job theft, duplicate execution, and lease manipulation
 
 - **Duplicate job execution**: `POST /claim` atomically pulls the oldest
