@@ -1,9 +1,10 @@
-import { chromium, type Browser, type Page } from "playwright";
+import type { Page } from "playwright";
 import type { RunnerConfig } from "../env.js";
 import { RecordingSessionClient } from "../api/recordingClient.js";
 import { RECORDER_INIT_SCRIPT } from "./domRecorder.js";
 import { resolveLocator } from "../execution/locators.js";
 import type { ClaimedStep } from "../api/executionClient.js";
+import { launchTrackedBrowser } from "../browser/browserRun.js";
 
 interface RecorderEmittedEvent {
   stepType: string;
@@ -57,7 +58,12 @@ export async function claimAndRecordOnce(
   // it (used for automated verification of the recorder; a human tester
   // normally just uses the window directly, no debug port needed).
   const launchArgs = opts.debugPort ? [`--remote-debugging-port=${opts.debugPort}`] : [];
-  const browser: Browser = await chromium.launch({ headless: opts.headless ?? false, slowMo: opts.headless ? 0 : 50, args: launchArgs });
+  const run = await launchTrackedBrowser({
+    label: `record-session${sessionId}`,
+    headless: opts.headless ?? false,
+    slowMo: opts.headless ? 0 : 50,
+    args: launchArgs,
+  });
   let lastEmittedNavUrl: string | null = null;
   let localPaused = false;
 
@@ -79,7 +85,7 @@ export async function claimAndRecordOnce(
   };
 
   try {
-    const page: Page = await browser.newPage();
+    const page: Page = run.page;
 
     await page.exposeFunction("__qaRecorderEmit", (event: RecorderEmittedEvent) =>
       enqueueAppend(async () => {
@@ -208,6 +214,6 @@ export async function claimAndRecordOnce(
 
     return { recorded: true, sessionId, finalStatus };
   } finally {
-    await browser.close();
+    await run.close();
   }
 }

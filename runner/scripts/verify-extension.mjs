@@ -22,11 +22,11 @@
 // localhost:5173, a project/workflow/session already created (this
 // script creates them itself via the real HTTP API).
 
-import { chromium } from "playwright";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { launchTrackedBrowser } from "./lib/browserLifecycle.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REAL_EXTENSION_PATH = path.resolve(__dirname, "..", "..", "extension");
@@ -123,11 +123,14 @@ async function main() {
   fs.writeFileSync(path.join(testExtensionPath, "manifest.json"), JSON.stringify(manifest, null, 2));
   console.log(`Test-only extension copy (real files, pre-granted host_permission for automation): ${testExtensionPath}`);
 
+  let browserRun;
+  try {
   console.log("Launching REAL headed Chromium with the extension loaded...");
-  const context = await chromium.launchPersistentContext("", {
-    headless: false,
+  browserRun = await launchTrackedBrowser({
+    label: "verify-extension",
     args: [`--disable-extensions-except=${testExtensionPath}`, `--load-extension=${testExtensionPath}`],
   });
+  const context = browserRun.context;
 
   let serviceWorker = context.serviceWorkers()[0];
   const deadline = Date.now() + 20000;
@@ -274,8 +277,10 @@ async function main() {
 
   console.log("\nALL EXTENSION VERIFICATION CHECKS PASSED (real Chrome, real extension, real backend).");
   console.log(`Published workflow revision id: ${saved.data.id} -- ready for replay via the real QA Runner.`);
-
-  await context.close();
+  } finally {
+    if (browserRun) await browserRun.close();
+    fs.rmSync(testExtensionPath, { recursive: true, force: true });
+  }
 }
 
 main().catch((err) => {

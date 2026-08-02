@@ -1,7 +1,8 @@
-import { chromium, type Browser, type Page } from "playwright";
+import type { Page } from "playwright";
 import type { RunnerConfig } from "../env.js";
 import { WorkflowRunClient, type ClaimedRun, type ClaimedStep, type RunDetail } from "../api/executionClient.js";
 import { resolveLocator, resolveValue, categorizeError } from "./locators.js";
+import { launchTrackedBrowser } from "../browser/browserRun.js";
 
 async function pollUntil(check: () => Promise<boolean>, timeoutMs: number, failureMessage: string, intervalMs = 200): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -195,7 +196,11 @@ export async function executeClaimedRun(
   const leaseToken = claimed.lease_token;
   const checkpointPollIntervalMs = opts.checkpointPollIntervalMs ?? 3000;
 
-  const browser: Browser = await chromium.launch({ headless: opts.headless ?? false, slowMo: opts.headless ? 0 : 150 });
+  const run = await launchTrackedBrowser({
+    label: `execute-run${runId}`,
+    headless: opts.headless ?? false,
+    slowMo: opts.headless ? 0 : 150,
+  });
   let finalStatus: ExecuteRunResult["finalStatus"] = "PASSED";
   let pausedAtCheckpoint = false;
   let resumedFromCheckpoint = false;
@@ -206,7 +211,7 @@ export async function executeClaimedRun(
   let alreadyFinalizedServerSide = false;
 
   try {
-    const page = await browser.newPage();
+    const page = run.page;
     let steps: ClaimedStep[] = claimed.steps;
     let stopped = false;
 
@@ -320,7 +325,7 @@ export async function executeClaimedRun(
       console.log(`[runner] run ${runId}: already finalized server-side (${finalStatus}) -- not calling /complete again`);
     }
   } finally {
-    await browser.close();
+    await run.close();
   }
 
   return { finalStatus, pausedAtCheckpoint, resumedFromCheckpoint };

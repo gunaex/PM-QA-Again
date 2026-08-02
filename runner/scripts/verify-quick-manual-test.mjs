@@ -7,10 +7,10 @@
 // Test, plus Excel/ZIP export inclusion (via the real API).
 //
 // Usage: node verify-quick-manual-test.mjs
-import { chromium } from "playwright";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { launchTrackedBrowser } from "./lib/browserLifecycle.mjs";
 
 const BACKEND = process.env.QA_VERIFY_BACKEND || "http://127.0.0.1:8001";
 const FRONTEND = process.env.QA_VERIFY_FRONTEND || "http://localhost:5174";
@@ -80,9 +80,10 @@ async function main() {
   await api(jar, "POST", `/api/${slug}/revisions/${rev.id}/cases`, { checkpoint_code: "RB-2", title: "case two", action_md: "a", expected_result_md: "e" });
   await api(jar, "POST", `/api/${slug}/suites/${suite.id}/revisions/${rev.id}/publish`);
 
-  const browser = await chromium.launch({ headless: false, slowMo: 40 });
-  const page = await browser.newPage();
+  const browserRun = await launchTrackedBrowser({ label: "verify-quick-manual-test", slowMo: 40 });
+  const page = browserRun.page;
 
+  try {
   let clickCount = 0;
   const origClick = page.click.bind(page);
   page.click = async (...args) => {
@@ -206,7 +207,9 @@ async function main() {
   const hasContinue = await page.locator('button:has-text("Continue Last Test")').count();
   console.log(`  Continue Last Test button present: ${hasContinue > 0}`);
 
-  await browser.close();
+  } finally {
+    await browserRun.close();
+  }
 
   console.log("\nExcel/ZIP export inclusion (real API, real files)...");
   const cyclesResp = await api(jar, "GET", `/api/${slug}/cycles?include_system_generated=true`);
