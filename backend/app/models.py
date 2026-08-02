@@ -529,7 +529,7 @@ class SignOff(ProjectBase):
 WORKFLOW_REVISION_STATUSES = ("DRAFT", "PUBLISHED", "SUPERSEDED")
 WORKFLOW_STEP_TYPES = (
     "NAVIGATE", "CLICK", "FILL", "SELECT", "CHECK", "UNCHECK", "PRESS_KEY",
-    "WAIT_FOR_ELEMENT", "ASSERT_VISIBLE", "ASSERT_TEXT", "ASSERT_URL",
+    "WAIT_FOR_ELEMENT", "WAIT", "ASSERT_VISIBLE", "ASSERT_TEXT", "ASSERT_URL",
     "SCREENSHOT", "MANUAL_CHECKPOINT",
 )
 LOCATOR_STRATEGIES = ("TEST_ID", "ROLE", "LABEL", "PLACEHOLDER", "TEXT", "CSS", "XPATH")
@@ -604,6 +604,11 @@ class WorkflowStep(ProjectBase):
     enabled = Column(Boolean, default=True)
     checkpoint_instructions = Column(Text, nullable=True)  # MANUAL_CHECKPOINT only
     evidence_policy = Column(String, default="NONE")  # see EVIDENCE_POLICIES
+    # When set (>1), the runner re-executes this single step in place
+    # this many times before advancing -- the "click this 5 times"
+    # macro case. Null/1 means run once, same as before this column
+    # existed. See runner/src/execution/executor.ts.
+    repeat_count = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

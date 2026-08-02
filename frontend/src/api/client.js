@@ -298,6 +298,8 @@ export const undoLastRecordedStep = (slug, sessionId) => api.post(`/${slug}/reco
 export const authorizeExtension = (slug, sessionId) => api.post(`/${slug}/recording-sessions/${sessionId}/authorize-extension`).then((r) => r.data)
 export const insertRecordingCheckpoint = (slug, sessionId, checkpointInstructions) =>
   api.post(`/${slug}/recording-sessions/${sessionId}/insert-checkpoint`, { checkpoint_instructions: checkpointInstructions }).then((r) => r.data)
+export const insertRecordingWait = (slug, sessionId, durationMs) =>
+  api.post(`/${slug}/recording-sessions/${sessionId}/insert-wait`, { duration_ms: durationMs }).then((r) => r.data)
 export const updateRecordedStep = (slug, sessionId, stepId, payload) =>
   api.put(`/${slug}/recording-sessions/${sessionId}/steps/${stepId}`, payload).then((r) => r.data)
 export const deleteRecordedStep = (slug, sessionId, stepId) =>

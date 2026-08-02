@@ -77,6 +77,15 @@ def _validate_step_fields(step_type: str, fields: dict):
     if step_type == "MANUAL_CHECKPOINT" and not (fields.get("checkpoint_instructions") or "").strip():
         raise HTTPException(status_code=400, detail="MANUAL_CHECKPOINT requires checkpoint_instructions")
 
+    if step_type == "WAIT":
+        raw = (fields.get("input_value") or "").strip()
+        if not raw.isdigit() or int(raw) <= 0:
+            raise HTTPException(status_code=400, detail="WAIT requires input_value to be a positive number of milliseconds")
+
+    repeat_count = fields.get("repeat_count")
+    if repeat_count is not None and (not isinstance(repeat_count, int) or repeat_count < 1):
+        raise HTTPException(status_code=400, detail="repeat_count must be a positive integer (or omitted)")
+
     # The sensitive-value rule: never a literal, always "${VAR_NAME}".
     if fields.get("is_sensitive"):
         value = fields.get("input_value") or ""
@@ -376,6 +385,7 @@ def update_step(
         "checkpoint_instructions": updates.get("checkpoint_instructions", obj.checkpoint_instructions),
         "is_sensitive": updates.get("is_sensitive", obj.is_sensitive),
         "evidence_policy": updates.get("evidence_policy", obj.evidence_policy),
+        "repeat_count": updates.get("repeat_count", obj.repeat_count),
     }
     _validate_step_fields(merged["step_type"], merged)
 

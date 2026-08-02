@@ -30,12 +30,20 @@ import { describeStep, STEP_RUN_ICON } from '../utils/describeStep.js'
 
 const STEP_TYPES = [
   'NAVIGATE', 'CLICK', 'FILL', 'SELECT', 'CHECK', 'UNCHECK', 'PRESS_KEY',
-  'WAIT_FOR_ELEMENT', 'ASSERT_VISIBLE', 'ASSERT_TEXT', 'ASSERT_URL', 'SCREENSHOT', 'MANUAL_CHECKPOINT',
+  'WAIT_FOR_ELEMENT', 'WAIT', 'ASSERT_VISIBLE', 'ASSERT_TEXT', 'ASSERT_URL', 'SCREENSHOT', 'MANUAL_CHECKPOINT',
 ]
 const LOCATOR_STRATEGIES = ['TEST_ID', 'ROLE', 'LABEL', 'PLACEHOLDER', 'TEXT', 'CSS', 'XPATH']
 const LOCATOR_TYPES = new Set(['CLICK', 'FILL', 'SELECT', 'CHECK', 'UNCHECK', 'PRESS_KEY', 'WAIT_FOR_ELEMENT', 'ASSERT_VISIBLE'])
+// Steps it makes sense to physically repeat in place -- excludes
+// NAVIGATE/WAIT/WAIT_FOR_ELEMENT/MANUAL_CHECKPOINT/asserts, where
+// "run this 5 times" either does nothing useful or is actively
+// confusing (repeating a page-load, a pause, or an assertion).
+const REPEATABLE_TYPES = new Set(['CLICK', 'FILL', 'SELECT', 'CHECK', 'UNCHECK', 'PRESS_KEY', 'SCREENSHOT'])
 
-const emptyStepForm = { step_type: 'CLICK', locator_strategy: 'ROLE', locator_value: '', input_value: '', expected_value: '', is_sensitive: false, checkpoint_instructions: '' }
+const emptyStepForm = {
+  step_type: 'CLICK', locator_strategy: 'ROLE', locator_value: '', input_value: '', expected_value: '',
+  is_sensitive: false, checkpoint_instructions: '', repeat_count: '',
+}
 
 // Raw runner/human event log -- useful for debugging a failure in
 // detail, not for a first glance at "did it work" (that's
@@ -116,6 +124,7 @@ export default function WorkflowDetail() {
   // QUEUED run with nobody running `npm run execute[:watch]` just sits
   // there forever with no visible explanation why nothing happens.
   const [runnerOnline, setRunnerOnline] = useState(null) // null = not checked yet
+  const [repeatWholeTest, setRepeatWholeTest] = useState(1)
 
   const selectedRevision = revisions.find((r) => r.id === selectedRevisionId) || null
   const isDraft = selectedRevision?.status === 'DRAFT'
@@ -183,7 +192,13 @@ export default function WorkflowDetail() {
   }, [slug, expandedRunId])
 
   const handleQueueRun = async () => {
-    await queueWorkflowRun(slug, selectedRevisionId)
+    // "Repeat whole test N×" is just N separate queued runs -- reuses
+    // the exact same queue/claim/execute path a runner already
+    // implements, no new mechanism.
+    const times = Math.max(1, Number(repeatWholeTest) || 1)
+    for (let i = 0; i < times; i++) {
+      await queueWorkflowRun(slug, selectedRevisionId)
+    }
     loadRuns()
   }
 
@@ -224,6 +239,7 @@ export default function WorkflowDetail() {
         payload.locator_strategy = null
         payload.locator_value = null
       }
+      payload.repeat_count = REPEATABLE_TYPES.has(payload.step_type) && payload.repeat_count ? Number(payload.repeat_count) : null
       const step = await createWorkflowStep(slug, workflowId, selectedRevisionId, payload)
       setSteps((prev) => [...prev, step])
       setStepForm(emptyStepForm)
@@ -431,6 +447,27 @@ export default function WorkflowDetail() {
                         className="px-2 py-1 text-xs border border-gray-300 rounded flex-1 min-w-[140px]"
                       />
                     )}
+                    {stepForm.step_type === 'WAIT' && (
+                      <input
+                        type="number"
+                        min="1"
+                        placeholder="Milliseconds (e.g. 2000)"
+                        value={stepForm.input_value}
+                        onChange={(e) => setStepForm({ ...stepForm, input_value: e.target.value })}
+                        className="px-2 py-1 text-xs border border-gray-300 rounded w-40"
+                      />
+                    )}
+                    {REPEATABLE_TYPES.has(stepForm.step_type) && (
+                      <input
+                        type="number"
+                        min="2"
+                        placeholder="Repeat ×N (optional)"
+                        value={stepForm.repeat_count}
+                        onChange={(e) => setStepForm({ ...stepForm, repeat_count: e.target.value })}
+                        title="Re-execute this step N times in place before moving to the next step"
+                        className="px-2 py-1 text-xs border border-gray-300 rounded w-32"
+                      />
+                    )}
                     {['ASSERT_TEXT', 'ASSERT_URL'].includes(stepForm.step_type) && (
                       <input
                         placeholder="Expected value"
@@ -544,9 +581,23 @@ export default function WorkflowDetail() {
                   </span>
                 )}
                 {isPublished && canEdit && (
-                  <button onClick={handleQueueRun} className="ml-auto px-3 py-1.5 text-xs bg-emerald-600 text-white rounded-md hover:bg-emerald-700">
-                    Queue Run
-                  </button>
+                  <span className="ml-auto flex items-center gap-2">
+                    <label className="flex items-center gap-1 text-xs text-gray-500">
+                      Repeat
+                      <input
+                        type="number"
+                        min="1"
+                        value={repeatWholeTest}
+                        onChange={(e) => setRepeatWholeTest(e.target.value)}
+                        title="Queue this same test N times"
+                        className="w-12 px-1 py-0.5 border border-gray-300 rounded text-xs"
+                      />
+                      ×
+                    </label>
+                    <button onClick={handleQueueRun} className="px-3 py-1.5 text-xs bg-emerald-600 text-white rounded-md hover:bg-emerald-700">
+                      Queue Run
+                    </button>
+                  </span>
                 )}
                 {!isPublished && <p className="ml-auto text-xs text-gray-400">Publish a revision to queue a run.</p>}
               </div>

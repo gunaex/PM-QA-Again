@@ -24,6 +24,7 @@ export interface ClaimedStep {
   expected_value: string | null;
   checkpoint_instructions: string | null;
   evidence_policy: string;
+  repeat_count: number | null;
 }
 
 export interface ClaimedRun {

@@ -89,6 +89,11 @@ PROJECT_COLUMN_PATCHES: dict[str, dict[str, str]] = {
     "recorded_steps": {
         "idempotency_key": "TEXT",
     },
+    # Phase D (macro-recorder simplification): per-step repeat count on
+    # existing workflow_steps rows.
+    "workflow_steps": {
+        "repeat_count": "INTEGER",
+    },
 }
 
 # Additive index patches (docs/PERFORMANCE_FAST_PASS.md) — `CREATE INDEX

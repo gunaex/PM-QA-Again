@@ -701,6 +701,7 @@ class WorkflowStepCreate(BaseModel):
     enabled: bool = True
     checkpoint_instructions: Optional[str] = None
     evidence_policy: str = "NONE"
+    repeat_count: Optional[int] = None
 
 
 class WorkflowStepUpdate(BaseModel):
@@ -717,6 +718,7 @@ class WorkflowStepUpdate(BaseModel):
     enabled: Optional[bool] = None
     checkpoint_instructions: Optional[str] = None
     evidence_policy: Optional[str] = None
+    repeat_count: Optional[int] = None
 
 
 class WorkflowStepOut(BaseModel):
@@ -736,6 +738,7 @@ class WorkflowStepOut(BaseModel):
     enabled: bool
     checkpoint_instructions: Optional[str] = None
     evidence_policy: str
+    repeat_count: Optional[int] = None
     created_at: datetime
 
     class Config:
@@ -859,6 +862,7 @@ class WorkflowRunClaimStep(BaseModel):
     expected_value: Optional[str] = None
     checkpoint_instructions: Optional[str] = None
     evidence_policy: str
+    repeat_count: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -1032,6 +1036,10 @@ class SaveAsDraftRequest(BaseModel):
 
 class InsertCheckpointRequest(BaseModel):
     checkpoint_instructions: str
+
+
+class InsertWaitRequest(BaseModel):
+    duration_ms: int
 
 
 class ExtensionAuthorizationOut(BaseModel):

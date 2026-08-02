@@ -359,6 +359,35 @@ def insert_checkpoint(
     return step
 
 
+@router.post("/{session_id}/insert-wait", response_model=schemas.RecordedStepOut)
+def insert_wait(
+    slug: str, session_id: int, payload: schemas.InsertWaitRequest,
+    db: Session = Depends(get_project_db), _user: models.User = Depends(require_tester),
+):
+    """Tester-inserted timed pause -- same "direct user-session action,
+    no lease needed" shape as insert_checkpoint above."""
+    session = _get_session(db, session_id)
+    if session.status not in ("RECORDING", "PAUSED"):
+        raise HTTPException(status_code=400, detail=f"Can only insert a wait while recording (current status: {session.status})")
+    if payload.duration_ms <= 0:
+        raise HTTPException(status_code=400, detail="duration_ms must be positive")
+    max_seq = (
+        db.query(models.RecordedStep.sequence_no)
+        .filter(models.RecordedStep.recording_session_id == session_id)
+        .order_by(models.RecordedStep.sequence_no.desc())
+        .first()
+    )
+    next_seq = (max_seq[0] + 1) if max_seq else 1
+    step = models.RecordedStep(
+        recording_session_id=session_id, sequence_no=next_seq, step_type="WAIT",
+        input_value=str(payload.duration_ms),
+    )
+    db.add(step)
+    db.commit()
+    db.refresh(step)
+    return step
+
+
 # ---------- reviewing / editing the captured buffer ----------
 
 

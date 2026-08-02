@@ -65,6 +65,11 @@ async function executeStep(page: Page, step: ClaimedStep, targetBaseUrl: string 
       await resolveLocator(page, step).waitFor({ state: "visible", timeout });
       return {};
     }
+    case "WAIT": {
+      const ms = Number(step.input_value);
+      await new Promise((resolve) => setTimeout(resolve, ms));
+      return {};
+    }
     case "ASSERT_VISIBLE": {
       const locator = resolveLocator(page, step);
       const visible = await locator.isVisible();
@@ -290,29 +295,44 @@ export async function executeClaimedRun(
         break;
       }
 
-      console.log(`[runner] run ${runId}: step ${step.sequence_no} (${step.step_type}) starting`);
-      const { id: stepRunId } = await client.startStepRun(runId, leaseToken, step.id);
+      // A repeat_count > 1 re-executes this single step in place, each
+      // attempt getting its own step-run row (attempt_number 1..N) --
+      // the "click this 5 times" macro case. Any failed attempt stops
+      // the whole run, same as a normal single-shot step failure.
+      const repeatCount = step.repeat_count && step.repeat_count > 1 ? step.repeat_count : 1;
+      let stepFailed = false;
 
-      try {
-        const { locatorUsedJson } = await executeStep(page, step, claimed.target_base_url ?? null);
+      for (let attempt = 1; attempt <= repeatCount; attempt++) {
+        const attemptLabel = repeatCount > 1 ? ` (repeat ${attempt}/${repeatCount})` : "";
+        console.log(`[runner] run ${runId}: step ${step.sequence_no} (${step.step_type})${attemptLabel} starting`);
+        const { id: stepRunId } = await client.startStepRun(runId, leaseToken, step.id, attempt);
 
-        if (step.step_type === "SCREENSHOT") {
-          const screenshotBuffer = await page.screenshot();
-          await client.uploadEvidence(runId, leaseToken, stepRunId, screenshotBuffer, `run-${runId}-step-${step.sequence_no}.png`);
+        try {
+          const { locatorUsedJson } = await executeStep(page, step, claimed.target_base_url ?? null);
+
+          if (step.step_type === "SCREENSHOT") {
+            const screenshotBuffer = await page.screenshot();
+            await client.uploadEvidence(runId, leaseToken, stepRunId, screenshotBuffer, `run-${runId}-step-${step.sequence_no}-${attempt}.png`);
+          }
+
+          await client.finishStepRun(runId, stepRunId, leaseToken, { status: "PASSED", locatorUsedJson });
+          console.log(`[runner] run ${runId}: step ${step.sequence_no}${attemptLabel} PASSED`);
+        } catch (err) {
+          const category = categorizeError(step.step_type, err);
+          const message = String((err as Error)?.message ?? err);
+          await client.finishStepRun(runId, stepRunId, leaseToken, {
+            status: "FAILED",
+            failureCategory: category,
+            machineMessage: step.is_sensitive ? `${category} (message withheld -- sensitive step)` : message,
+          });
+          console.log(`[runner] run ${runId}: step ${step.sequence_no}${attemptLabel} FAILED (${category})`);
+          finalStatus = "FAILED";
+          stepFailed = true;
+          break;
         }
+      }
 
-        await client.finishStepRun(runId, stepRunId, leaseToken, { status: "PASSED", locatorUsedJson });
-        console.log(`[runner] run ${runId}: step ${step.sequence_no} PASSED`);
-      } catch (err) {
-        const category = categorizeError(step.step_type, err);
-        const message = String((err as Error)?.message ?? err);
-        await client.finishStepRun(runId, stepRunId, leaseToken, {
-          status: "FAILED",
-          failureCategory: category,
-          machineMessage: step.is_sensitive ? `${category} (message withheld -- sensitive step)` : message,
-        });
-        console.log(`[runner] run ${runId}: step ${step.sequence_no} FAILED (${category})`);
-        finalStatus = "FAILED";
+      if (stepFailed) {
         stopped = true;
         break;
       }

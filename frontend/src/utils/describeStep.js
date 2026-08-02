@@ -53,36 +53,38 @@ export const STEP_RUN_ICON = { PASSED: '✅', FAILED: '❌', RUNNING: '⏳', PEN
  * @returns {{icon: string, text: string}}
  */
 export function describeStep(step) {
-  const { step_type: type, locator_strategy: strategy, locator_value: value, input_value, expected_value, checkpoint_instructions } = step || {}
+  const { step_type: type, locator_strategy: strategy, locator_value: value, input_value, expected_value, checkpoint_instructions, repeat_count: repeatCount } = step || {}
   const el = () => describeLocator(strategy, value)
+  const suffix = repeatCount > 1 ? ` (×${repeatCount})` : ''
+  const withSuffix = (d) => ({ ...d, text: `${d.text}${suffix}` })
 
   switch (type) {
     case 'NAVIGATE':
       return { icon: '🧭', text: `Go to ${input_value || 'a page'}` }
     case 'CLICK':
-      return { icon: '🖱️', text: `Click ${el()}` }
+      return withSuffix({ icon: '🖱️', text: `Click ${el()}` })
     case 'FILL':
-      return { icon: '⌨️', text: `Type into ${el()}` }
+      return withSuffix({ icon: '⌨️', text: `Type into ${el()}` })
     case 'SELECT':
-      return { icon: '⌨️', text: `Choose "${input_value || '?'}" in ${el()}` }
+      return withSuffix({ icon: '⌨️', text: `Choose "${input_value || '?'}" in ${el()}` })
     case 'CHECK':
-      return { icon: '☑️', text: `Check ${el()}` }
+      return withSuffix({ icon: '☑️', text: `Check ${el()}` })
     case 'UNCHECK':
-      return { icon: '⬜', text: `Uncheck ${el()}` }
+      return withSuffix({ icon: '⬜', text: `Uncheck ${el()}` })
     case 'PRESS_KEY':
-      return { icon: '⌨️', text: `Press "${input_value || 'Enter'}"${value ? ` in ${el()}` : ''}` }
+      return withSuffix({ icon: '⌨️', text: `Press "${input_value || 'Enter'}"${value ? ` in ${el()}` : ''}` })
     case 'WAIT_FOR_ELEMENT':
       return { icon: '⏳', text: `Wait for ${el()} to appear` }
     case 'WAIT':
       return { icon: '⏱️', text: `Wait ${describeDuration(input_value)}` }
     case 'ASSERT_VISIBLE':
-      return { icon: '👁️', text: `Check that ${el()} is visible` }
+      return withSuffix({ icon: '👁️', text: `Check that ${el()} is visible` })
     case 'ASSERT_TEXT':
-      return { icon: '👁️', text: `Check the page shows "${expected_value || '?'}"` }
+      return withSuffix({ icon: '👁️', text: `Check the page shows "${expected_value || '?'}"` })
     case 'ASSERT_URL':
-      return { icon: '👁️', text: `Check the page URL contains "${expected_value || '?'}"` }
+      return withSuffix({ icon: '👁️', text: `Check the page URL contains "${expected_value || '?'}"` })
     case 'SCREENSHOT':
-      return { icon: '📸', text: 'Take a screenshot' }
+      return withSuffix({ icon: '📸', text: 'Take a screenshot' })
     case 'MANUAL_CHECKPOINT':
       return { icon: '✋', text: checkpoint_instructions ? `Pause for you: ${checkpoint_instructions}` : 'Pause for a manual check' }
     default:

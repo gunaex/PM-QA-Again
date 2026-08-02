@@ -9,6 +9,7 @@ import {
   undoLastRecordedStep,
   authorizeExtension,
   insertRecordingCheckpoint,
+  insertRecordingWait,
   updateRecordedStep,
   deleteRecordedStep,
   reorderRecordedSteps,
@@ -52,6 +53,7 @@ export default function RecordingPanel({ slug, workflowId, canEdit, onDraftSaved
   const [session, setSession] = useState(null)
   const [targetUrl, setTargetUrl] = useState(`${window.location.origin}/login`)
   const [checkpointText, setCheckpointText] = useState('')
+  const [waitSeconds, setWaitSeconds] = useState('2')
   const [revisionLabel, setRevisionLabel] = useState('')
   const [error, setError] = useState(null)
   const [saving, setSaving] = useState(false)
@@ -133,6 +135,14 @@ export default function RecordingPanel({ slug, workflowId, canEdit, onDraftSaved
     if (!checkpointText.trim()) return
     await insertRecordingCheckpoint(slug, session.id, checkpointText.trim())
     setCheckpointText('')
+    refresh()
+  }
+
+  const handleInsertWait = async (e) => {
+    e.preventDefault()
+    const seconds = Number(waitSeconds)
+    if (!seconds || seconds <= 0) return
+    await insertRecordingWait(slug, session.id, Math.round(seconds * 1000))
     refresh()
   }
 
@@ -278,17 +288,34 @@ export default function RecordingPanel({ slug, workflowId, canEdit, onDraftSaved
       )}
 
       {(isRecording || isPaused) && (
-        <form onSubmit={handleInsertCheckpoint} className="flex gap-2">
-          <input
-            value={checkpointText}
-            onChange={(e) => setCheckpointText(e.target.value)}
-            placeholder="Insert a manual checkpoint instruction…"
-            className="flex-1 px-2 py-1 text-xs border border-gray-300 rounded"
-          />
-          <button type="submit" className="px-2 py-1 text-xs border border-gray-300 rounded hover:bg-gray-50">
-            + Insert Checkpoint
-          </button>
-        </form>
+        <div className="flex gap-2 flex-wrap">
+          <form onSubmit={handleInsertCheckpoint} className="flex gap-2 flex-1 min-w-[240px]">
+            <input
+              value={checkpointText}
+              onChange={(e) => setCheckpointText(e.target.value)}
+              placeholder="Insert a manual checkpoint instruction…"
+              className="flex-1 px-2 py-1 text-xs border border-gray-300 rounded"
+            />
+            <button type="submit" className="px-2 py-1 text-xs border border-gray-300 rounded hover:bg-gray-50 whitespace-nowrap">
+              + Insert Checkpoint
+            </button>
+          </form>
+          <form onSubmit={handleInsertWait} className="flex gap-2 items-center">
+            <input
+              type="number"
+              min="0.1"
+              step="0.1"
+              value={waitSeconds}
+              onChange={(e) => setWaitSeconds(e.target.value)}
+              title="Seconds to pause here during replay"
+              className="w-16 px-2 py-1 text-xs border border-gray-300 rounded"
+            />
+            <span className="text-xs text-gray-400">sec</span>
+            <button type="submit" className="px-2 py-1 text-xs border border-gray-300 rounded hover:bg-gray-50 whitespace-nowrap">
+              + Insert Wait
+            </button>
+          </form>
+        </div>
       )}
 
       <div>
