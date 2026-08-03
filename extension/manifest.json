@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "QA-Again Recorder",
   "version": "1.0.0",
-  "description": "Records workflow steps in your active browser tab for QA-Again's hybrid workflow recorder. Advanced/fallback mode: the existing Playwright-controlled recorder (npm run record) remains available separately.",
+  "description": "Records and replays QA-Again workflows in the tester-selected browser tab.",
   "permissions": ["activeTab", "scripting", "storage"],
   "host_permissions": [],
   "optional_host_permissions": ["http://*/*", "https://*/*"],

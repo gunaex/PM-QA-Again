@@ -224,6 +224,7 @@ def _build_hybrid_manifest_section(db, cycle: models.TestCycle) -> dict:
                 "attempt_number": sr.attempt_number,
                 "status": sr.status,
                 "failure_category": sr.failure_category,
+                "duration_ms": sr.duration_ms,
                 "started_at": iso(sr.started_at),
                 "ended_at": iso(sr.ended_at),
             }

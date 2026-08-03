@@ -23,11 +23,19 @@ function showDisconnected() {
   controls.classList.add("hidden");
 }
 
+function showPlaybackConnected() {
+  connectForm.classList.add("hidden");
+  controls.classList.add("hidden");
+}
+
 async function refreshStatus() {
   const resp = await chrome.runtime.sendMessage({ type: "QA_EXT_STATUS" });
   if (resp && resp.config && resp.config.recording) {
     showConnected();
     setStatus(`Connected -- session ${resp.config.sessionId} on ${resp.config.backendUrl}`);
+  } else if (resp && resp.config && resp.config.mode === "playback") {
+    showPlaybackConnected();
+    setStatus(`Test run ${resp.config.runId} is ${resp.config.state}. Use the floating controller in the selected tab.`);
   } else {
     showDisconnected();
   }
@@ -40,14 +48,17 @@ async function refreshStatus() {
 function decodePairingCode(raw) {
   try {
     const decoded = JSON.parse(atob(raw));
-    if (!decoded.backendUrl || !decoded.projectSlug || !decoded.sessionId || !decoded.token) {
+    const mode = decoded.mode === "playback" ? "playback" : "recording";
+    if (!decoded.backendUrl || !decoded.projectSlug || !decoded.token || (mode === "playback" ? !decoded.runId : !decoded.sessionId)) {
       setStatus("Pairing code is missing fields -- copy it again from QA-Again.");
       return null;
     }
     return {
+      mode,
       backendUrl: String(decoded.backendUrl),
       projectSlug: String(decoded.projectSlug),
-      sessionId: String(decoded.sessionId),
+      sessionId: decoded.sessionId ? String(decoded.sessionId) : null,
+      runId: decoded.runId ? String(decoded.runId) : null,
       extensionToken: String(decoded.token),
     };
   } catch {
@@ -74,31 +85,13 @@ function resolveConnectionFields() {
     setStatus("Paste a pairing code, or fill in every Advanced field.");
     return null;
   }
-  return { backendUrl, projectSlug, sessionId, extensionToken };
+  return { mode: "recording", backendUrl, projectSlug, sessionId, extensionToken };
 }
 
 document.getElementById("connectBtn").addEventListener("click", async () => {
   const fields = resolveConnectionFields();
   if (!fields) return;
-  const { backendUrl, projectSlug, sessionId, extensionToken } = fields;
-
-  let origin;
-  try {
-    origin = new URL(backendUrl).origin + "/*";
-  } catch {
-    setStatus("Backend URL is not valid.");
-    return;
-  }
-
-  // Explicit, narrow, user-gesture-driven permission request -- scoped
-  // to exactly the one backend origin the tester just typed in, shown
-  // to them as a real Chrome permission prompt naming that origin.
-  // Nothing broader is ever requested.
-  const granted = await chrome.permissions.request({ origins: [origin] });
-  if (!granted) {
-    setStatus("Cannot record without granting access to the backend URL you entered.");
-    return;
-  }
+  const { mode, backendUrl, projectSlug, sessionId, runId, extensionToken } = fields;
 
   const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!activeTab) {
@@ -106,30 +99,50 @@ document.getElementById("connectBtn").addEventListener("click", async () => {
     return;
   }
   // chrome://, edge://, the Web Store, and other internal pages can
-  // never accept an injected content script -- Chrome blocks this
-  // unconditionally, regardless of any permission granted above. Catch
-  // it here with a clear, actionable message instead of surfacing the
-  // raw "Cannot access a chrome:// URL" error from background.js.
+  // never accept an injected content script.
   if (!/^https?:\/\//.test(activeTab.url || "")) {
-    setStatus("Switch to the tab with the app you want to record first (not this browser page), then click the icon and try again.");
+    setStatus("Switch to the target app tab first (not this browser page), then click the icon and try again.");
+    return;
+  }
+
+  let backendOrigin;
+  let targetOrigin;
+  try {
+    backendOrigin = new URL(backendUrl).origin + "/*";
+    targetOrigin = new URL(activeTab.url).origin + "/*";
+  } catch {
+    setStatus("Backend or target-tab URL is not valid.");
+    return;
+  }
+
+  // Explicit, narrow, user-gesture-driven permission request -- scoped
+  // to the backend plus this one selected target origin. Persisting the
+  // target-origin permission lets playback survive full-page navigation;
+  // no wildcard/all-sites permission is requested.
+  const granted = await chrome.permissions.request({ origins: [...new Set([backendOrigin, targetOrigin])] });
+  if (!granted) {
+    setStatus("Cannot connect without granting access to the QA-Again backend URL.");
     return;
   }
 
   setStatus("Connecting...");
-  const resp = await chrome.runtime.sendMessage({
-    type: "QA_EXT_CONNECT",
-    backendUrl,
-    projectSlug,
-    sessionId,
-    extensionToken,
-    tabId: activeTab.id,
-  });
+  const resp = await chrome.runtime.sendMessage(
+    mode === "playback"
+      ? { type: "QA_EXT_ATTACH_PLAYBACK", backendUrl, projectSlug, runId, extensionToken, tabId: activeTab.id }
+      : { type: "QA_EXT_CONNECT", backendUrl, projectSlug, sessionId, extensionToken, tabId: activeTab.id, targetUrl: activeTab.url },
+  );
 
-  if (resp.ok) {
-    showConnected();
-    setStatus(`Recording started on this tab. Session ${sessionId} is now RECORDING in QA-Again.`);
+  if (resp?.ok) {
+    if (mode === "playback") {
+      showPlaybackConnected();
+      setStatus(`Target selected. Use the floating controller in this tab to start ${resp.stepCount} action(s).`);
+      setTimeout(() => window.close(), 700);
+    } else {
+      showConnected();
+      setStatus(`Recording started on this tab. Session ${sessionId} is now RECORDING in QA-Again.`);
+    }
   } else {
-    setStatus(`Could not start recording: ${resp.error || "unknown error"}`);
+    setStatus(`Could not connect: ${resp.error || "unknown error"}`);
   }
 });
 

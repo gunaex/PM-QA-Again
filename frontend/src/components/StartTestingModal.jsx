@@ -34,7 +34,7 @@ export default function StartTestingModal({ slug, onClose }) {
 
   useEffect(() => {
     if (mode === 'suite') listSuites(slug).then(setSuites)
-    if (mode === 'rerun') listCycles(slug).then(setCycles)
+    if (mode === 'rerun') listCycles(slug, true).then(setCycles)
   }, [slug, mode])
 
   const goToExecution = (cycleId, resultId) => {

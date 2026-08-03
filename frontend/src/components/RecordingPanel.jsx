@@ -10,6 +10,7 @@ import {
   authorizeExtension,
   insertRecordingCheckpoint,
   insertRecordingWait,
+  insertRecordingScreenshotAfter,
   updateRecordedStep,
   deleteRecordedStep,
   reorderRecordedSteps,
@@ -49,21 +50,18 @@ function suggestSecretName(step, fallbackIndex) {
   return `\${SECRET_${fallbackIndex}}`
 }
 
-/** HYB-3 recorder control panel. Recording itself happens inside a
- * separate Playwright-controlled browser the QA Runner process
- * launches (never this page's own browser) -- this panel is the
- * remote control: start/pause/resume/stop, live captured-step list,
- * review/edit before saving, save as DRAFT (never auto-published). */
+/** Recorder control panel. The tester chooses an existing browser tab
+ * through the QA-Again extension, then records normal interactions in
+ * that tab. This panel shows the captured steps and review controls. */
 export default function RecordingPanel({ slug, workflowId, canEdit, nextRevisionLabel = 'v1', onDraftSaved }) {
   const [session, setSession] = useState(null)
-  const [targetUrl, setTargetUrl] = useState(`${window.location.origin}/login`)
   const [checkpointText, setCheckpointText] = useState('')
   const [waitSeconds, setWaitSeconds] = useState('2')
   const [error, setError] = useState(null)
   const [saving, setSaving] = useState(false)
   const [extensionToken, setExtensionToken] = useState(null)
+  const [pairingCopied, setPairingCopied] = useState(false)
   const [savedRevision, setSavedRevision] = useState(null)
-  const [showConnectionHelp, setShowConnectionHelp] = useState(false)
   const [showActionTools, setShowActionTools] = useState(false)
   const [previewRun, setPreviewRun] = useState(null)
   const [previewError, setPreviewError] = useState(null)
@@ -105,17 +103,17 @@ export default function RecordingPanel({ slug, workflowId, canEdit, nextRevision
   const handleStart = async () => {
     setError(null)
     try {
-      const s = await createRecordingSession(slug, workflowId, targetUrl)
+      // The extension replaces this with the selected tab's real URL.
+      const s = await createRecordingSession(slug, workflowId, 'about:blank')
       setSession(s)
       setSavedRevision(null)
-      setShowConnectionHelp(false)
+      setPairingCopied(false)
       try {
         const result = await authorizeExtension(slug, s.id)
         setExtensionToken(result.pairing_code)
-      } catch {
-        // The always-on recorder may claim the session before a browser
-        // extension is needed. Connection help remains available if not.
+      } catch (err) {
         setExtensionToken(null)
+        setError(err.response?.data?.detail || 'Could not create the browser connection code. Try again below.')
       }
     } catch (err) {
       setError(err.response?.data?.detail || 'Could not start recording. Please try again.')
@@ -140,8 +138,18 @@ export default function RecordingPanel({ slug, workflowId, canEdit, nextRevision
     try {
       const result = await authorizeExtension(slug, session.id)
       setExtensionToken(result.pairing_code)
+      setPairingCopied(false)
     } catch (err) {
       setError(err.response?.data?.detail || 'Could not authorize the extension')
+    }
+  }
+
+  const handleCopyPairingCode = async () => {
+    try {
+      await navigator.clipboard.writeText(extensionToken)
+      setPairingCopied(true)
+    } catch {
+      setError('Could not copy automatically. Select the connection code and copy it manually.')
     }
   }
   const handleDiscard = async () => {
@@ -164,6 +172,11 @@ export default function RecordingPanel({ slug, workflowId, canEdit, nextRevision
     const seconds = Number(waitSeconds)
     if (!seconds || seconds <= 0) return
     await insertRecordingWait(slug, session.id, Math.round(seconds * 1000))
+    refresh()
+  }
+
+  const handleInsertScreenshotAfter = async (step) => {
+    await insertRecordingScreenshotAfter(slug, session.id, step.id)
     refresh()
   }
 
@@ -222,21 +235,11 @@ export default function RecordingPanel({ slug, workflowId, canEdit, nextRevision
   if (!session) {
     return (
       <div className="space-y-3">
-        <div className="bg-white border border-emerald-200 rounded-xl p-5 shadow-sm">
-          <p className="font-semibold text-gray-900">Record</p>
-          <p className="text-sm text-gray-500 mt-1 mb-3">Enter the page where this journey begins, then use the website as a tester normally would.</p>
-          <div className="flex flex-col sm:flex-row gap-2">
-            <input
-              value={targetUrl}
-              onChange={(e) => setTargetUrl(e.target.value)}
-              placeholder="Starting URL"
-              className="flex-1 px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-            />
+        <div className="flex items-center gap-3 flex-wrap">
             <button onClick={handleStart} className="px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-md hover:bg-emerald-700">
               ● Record
             </button>
-          </div>
-          {error && <p className="text-xs text-red-600 mt-2">{error}</p>}
+          {error && <p className="text-xs text-red-600">{error}</p>}
         </div>
 
         {savedRevision && (
@@ -328,25 +331,34 @@ export default function RecordingPanel({ slug, workflowId, canEdit, nextRevision
       </div>
 
       {session.status === 'REQUESTED' && (
-        <div className="bg-gray-50 border border-gray-200 rounded-md p-3 text-sm">
-          <p className="text-gray-600">Waiting for the recording window to connect.</p>
-          <button
-            onClick={() => setShowConnectionHelp((open) => !open)}
-            className="text-xs text-emerald-700 hover:underline mt-2"
-          >
-            {showConnectionHelp ? 'Hide connection help' : 'Recording window did not open?'}
-          </button>
-          {showConnectionHelp && (
-            <div className="mt-3 text-xs text-gray-600 space-y-2">
-              <p>Open the page you want to record, click the QA-Again Recorder extension, paste this connection code, then press Start.</p>
-              {extensionToken ? (
-                <code className="block break-all bg-white border border-gray-200 rounded px-2 py-1 select-all">{extensionToken}</code>
-              ) : (
-                <button onClick={handleAuthorizeExtension} className="px-3 py-1.5 border border-emerald-300 text-emerald-700 rounded hover:bg-emerald-50">
-                  Create connection code
-                </button>
-              )}
+        <div className="bg-emerald-50 border border-emerald-200 rounded-md p-4 text-sm">
+          <p className="font-semibold text-gray-900">Choose the tab you want to record</p>
+          <ol className="mt-2 ml-5 list-decimal text-xs text-gray-600 space-y-1">
+            <li>Copy the connection code below.</li>
+            <li>Switch to the tab where this journey should begin.</li>
+            <li>Open the QA-Again Recorder extension, paste the code, then click <strong>Use This Tab</strong>.</li>
+            <li>Use the website normally. Return here and click <strong>Stop Recording</strong> when finished.</li>
+          </ol>
+          {extensionToken ? (
+            <div className="mt-3 flex flex-col sm:flex-row gap-2">
+              <input
+                readOnly
+                value={extensionToken}
+                aria-label="Recording connection code"
+                onFocus={(event) => event.target.select()}
+                className="min-w-0 flex-1 bg-white border border-emerald-200 rounded px-2 py-1.5 text-xs font-mono"
+              />
+              <button
+                onClick={handleCopyPairingCode}
+                className="px-3 py-1.5 bg-emerald-600 text-white rounded hover:bg-emerald-700 whitespace-nowrap"
+              >
+                {pairingCopied ? 'Copied!' : 'Copy Code'}
+              </button>
             </div>
+          ) : (
+            <button onClick={handleAuthorizeExtension} className="mt-3 px-3 py-1.5 border border-emerald-400 text-emerald-700 rounded hover:bg-emerald-100">
+              Create connection code
+            </button>
           )}
         </div>
       )}
@@ -392,7 +404,7 @@ export default function RecordingPanel({ slug, workflowId, canEdit, nextRevision
           )}
         </div>
         {steps.length === 0 ? (
-          <p className="text-xs text-gray-400">Nothing captured yet — interact with the recording browser window.</p>
+          <p className="text-xs text-gray-400">Nothing captured yet — interact with the target tab after connecting the extension.</p>
         ) : (
           <ol className="space-y-1">
             {steps.map((s, i) => (
@@ -408,6 +420,15 @@ export default function RecordingPanel({ slug, workflowId, canEdit, nextRevision
                     {canTestLocator && s.locator_value && (
                       <button onClick={() => handleTestLocator(s)} className="px-1 border rounded">
                         Test locator
+                      </button>
+                    )}
+                    {showActionTools && (isPaused || isStopped) && s.step_type !== 'SCREENSHOT' && (
+                      <button
+                        onClick={() => handleInsertScreenshotAfter(s)}
+                        className="px-1.5 border border-emerald-300 text-emerald-700 rounded whitespace-nowrap hover:bg-emerald-50"
+                        title="Add a screenshot immediately after this action"
+                      >
+                        📷 Add screenshot after this action
                       </button>
                     )}
                     {isStopped && (

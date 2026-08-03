@@ -268,6 +268,27 @@ def test_cors_preflight_reflects_only_allowed_origin():
     assert r2.headers.get("access-control-allow-origin") != "https://evil.example.com"
 
 
+def test_local_dev_fallback_port_is_allowed():
+    anon = _fresh_client()
+    r = anon.options(
+        "/api/auth/login",
+        headers={
+            "Origin": "http://localhost:5174",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    assert r.headers.get("access-control-allow-origin") == "http://localhost:5174"
+
+    loopback = anon.options(
+        "/api/auth/login",
+        headers={
+            "Origin": "http://127.0.0.1:5174",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    assert loopback.headers.get("access-control-allow-origin") == "http://127.0.0.1:5174"
+
+
 # ---------- CSRF (Origin check on cookie-authenticated writes) ----------
 
 

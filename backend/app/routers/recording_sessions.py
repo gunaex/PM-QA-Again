@@ -1,20 +1,16 @@
 """HYB-3: browser workflow recorder session protocol.
 
-Recording happens only inside a Playwright browser the QA Runner itself
-launches (never the tester's everyday browser, never a global OS hook).
-The claim/lease shape deliberately mirrors workflow_runs.py's job
-protocol exactly -- a RecordingSession is claimed outbound-only by a
-runner, holds a time-limited lease renewed by heartbeat, and is
-lazily marked RUNNER_LOST if the lease expires. The one real
-difference: its payload is a buffer of *candidate* RecordedStep rows a
-human reviews, edits, and explicitly saves -- never an auto-published
-workflow revision.
+Recording normally happens in the tester-selected tab through the
+QA-Again browser extension. The legacy claim/lease protocol remains for
+compatibility, while both paths write the same reviewable candidate
+RecordedStep rows and never auto-publish a workflow revision.
 """
 import base64
 import json
 import secrets
 import uuid
 from datetime import datetime, timedelta
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
@@ -167,6 +163,18 @@ def _authorize_human_or_extension(
     if user.role not in ("ADMIN", "TESTER"):
         raise HTTPException(status_code=403, detail=f"Role '{user.role}' is not permitted to perform this action")
     return user.email
+
+
+def _step_target_hint(locator_strategy: str | None, locator_value: str | None) -> str:
+    """Short human-readable element description for a save-as-draft
+    validation error's "Step N (...)" prefix -- ROLE values are stored
+    as "role:accessible name" (see extension/content.js), so show just
+    the name; other strategies are already human-readable as captured."""
+    if not locator_value:
+        return ""
+    if locator_strategy == "ROLE" and ":" in locator_value:
+        return locator_value.split(":", 1)[1]
+    return locator_value
 
 
 def _get_session(db: Session, session_id: int) -> models.RecordingSession:
@@ -388,6 +396,64 @@ def insert_wait(
     return step
 
 
+@router.post("/{session_id}/insert-screenshot", response_model=schemas.RecordedStepOut)
+def insert_screenshot(
+    slug: str, session_id: int,
+    db: Session = Depends(get_project_db), _user: models.User = Depends(require_tester),
+):
+    session = _get_session(db, session_id)
+    if session.status not in ("RECORDING", "PAUSED"):
+        raise HTTPException(status_code=400, detail=f"Can only insert a screenshot while recording (current status: {session.status})")
+    max_seq = (
+        db.query(models.RecordedStep.sequence_no)
+        .filter(models.RecordedStep.recording_session_id == session_id)
+        .order_by(models.RecordedStep.sequence_no.desc())
+        .first()
+    )
+    step = models.RecordedStep(
+        recording_session_id=session_id,
+        sequence_no=(max_seq[0] + 1) if max_seq else 1,
+        step_type="SCREENSHOT",
+        description="Capture screenshot",
+    )
+    db.add(step)
+    db.commit()
+    db.refresh(step)
+    return step
+
+
+@router.post("/{session_id}/steps/{step_id}/insert-screenshot-after", response_model=schemas.RecordedStepOut)
+def insert_screenshot_after_step(
+    slug: str, session_id: int, step_id: int,
+    db: Session = Depends(get_project_db), _user: models.User = Depends(require_tester),
+):
+    session = _get_session(db, session_id)
+    if session.status not in ("STOPPED", "PAUSED"):
+        raise HTTPException(status_code=400, detail="Screenshots can be inserted after an action once recording is stopped (or paused)")
+    target = db.query(models.RecordedStep).filter(
+        models.RecordedStep.id == step_id,
+        models.RecordedStep.recording_session_id == session_id,
+    ).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="Recorded step not found")
+    later_steps = db.query(models.RecordedStep).filter(
+        models.RecordedStep.recording_session_id == session_id,
+        models.RecordedStep.sequence_no > target.sequence_no,
+    ).order_by(models.RecordedStep.sequence_no.desc()).all()
+    for later in later_steps:
+        later.sequence_no += 1
+    screenshot = models.RecordedStep(
+        recording_session_id=session_id,
+        sequence_no=target.sequence_no + 1,
+        step_type="SCREENSHOT",
+        description="Capture screenshot",
+    )
+    db.add(screenshot)
+    db.commit()
+    db.refresh(screenshot)
+    return screenshot
+
+
 # ---------- reviewing / editing the captured buffer ----------
 
 
@@ -516,7 +582,18 @@ def save_as_draft(
         # Reuses HYB-1's exact step-field validation (locator requirements
         # per step type, sensitive-value-must-be-a-placeholder rule) --
         # a recorded step must pass the same bar a manually-typed one does.
-        _validate_step_fields(fields["step_type"], fields)
+        # A recording can have many steps, so a validation failure here
+        # needs to say WHICH one -- unlike the single-step create/update
+        # forms, where the step being edited is already on screen.
+        try:
+            _validate_step_fields(fields["step_type"], fields)
+        except HTTPException as exc:
+            hint = _step_target_hint(rec.locator_strategy, rec.locator_value)
+            where = f' targeting "{hint}"' if hint else ""
+            # exc.detail already ends with the fix ("...or delete this
+            # step.") -- just prefix with which step, in the same order
+            # they appear in the review list below.
+            raise HTTPException(status_code=400, detail=f"Step {i} ({rec.step_type}{where}): {exc.detail}")
         db.add(models.WorkflowStep(revision_id=revision.id, sequence_no=i, **fields))
 
     session.status = "SAVED"
@@ -576,6 +653,18 @@ def extension_connect(slug: str, session_id: int, payload: schemas.ExtensionConn
     auth = _get_valid_extension_auth(db, session_id, payload.extension_token)
     if session.status != "REQUESTED":
         raise HTTPException(status_code=400, detail=f"This session is not awaiting connection (current status: {session.status})")
+    if payload.target_url:
+        parsed_target = urlsplit(payload.target_url)
+        if parsed_target.scheme not in ("http", "https") or not parsed_target.netloc:
+            raise HTTPException(status_code=400, detail="The selected tab must be an http or https page")
+        session.target_url = payload.target_url
+        db.add(models.RecordedStep(
+            recording_session_id=session.id,
+            sequence_no=1,
+            step_type="NAVIGATE",
+            input_value=payload.target_url,
+            page_context=parsed_target.path or "/",
+        ))
     session.status = "RECORDING"
     session.extension_authorization_id = auth.id
     db.commit()

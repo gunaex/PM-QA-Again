@@ -58,6 +58,11 @@ account's normal GitHub notification policy.
 
 ## Local development
 
-`EXECUTION_PROVIDER=local` (the default) preserves the old pull-based runner
-for debugging. It is not part of the tester experience and is not deployed to
-production.
+`EXECUTION_PROVIDER=embedded` (the default) starts the Playwright executor as
+a hidden, one-shot child process when the tester presses **Run Test**. The
+browser closes and its temporary runner credential is revoked when the process
+ends. No runner terminal is opened or kept alive.
+
+`EXECUTION_PROVIDER=local` explicitly preserves the old pull-based claim mode
+for protocol tests and low-level debugging only. It must not be used for the
+normal tester experience because no process is started automatically.

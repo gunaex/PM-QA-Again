@@ -113,6 +113,16 @@ def test_extension_full_recording_protocol(auth_client, project_slug):
     assert stopped.status_code == 200
     assert stopped.json()["status"] == "STOPPED"
 
+    stopped_detail = auth_client.get(f"/api/{slug}/recording-sessions/{session_id}").json()
+    first_step_id = stopped_detail["recorded_steps"][0]["id"]
+    inserted = auth_client.post(
+        f"/api/{slug}/recording-sessions/{session_id}/steps/{first_step_id}/insert-screenshot-after"
+    )
+    assert inserted.status_code == 200, inserted.text
+    reviewed = auth_client.get(f"/api/{slug}/recording-sessions/{session_id}").json()["recorded_steps"]
+    first_index = next(i for i, step in enumerate(reviewed) if step["id"] == first_step_id)
+    assert reviewed[first_index + 1]["step_type"] == "SCREENSHOT"
+
     # Extension token is revoked immediately on stop. Heartbeat on a
     # terminal-status session is a harmless no-op read (matches the
     # existing precedent for runner-mode heartbeats against a completed
@@ -131,6 +141,22 @@ def test_extension_full_recording_protocol(auth_client, project_slug):
     published = auth_client.post(f"/api/{slug}/workflows/{workflow_id}/revisions/{saved.json()['id']}/publish")
     assert published.status_code == 200
     assert published.json()["status"] == "PUBLISHED"
+
+
+def test_selected_tab_becomes_recording_start_step(auth_client, project_slug):
+    workflow_id = _make_workflow(auth_client, project_slug, "selected tab start")
+    session_id, ext_token = _create_and_authorize(auth_client, project_slug, workflow_id)
+    selected_url = "https://example.test/orders/42"
+
+    connected = _fresh_client().post(
+        f"/api/{project_slug}/recording-sessions/{session_id}/extension-connect",
+        json={"extension_token": ext_token, "target_url": selected_url},
+    )
+
+    assert connected.status_code == 200, connected.text
+    detail = auth_client.get(f"/api/{project_slug}/recording-sessions/{session_id}").json()
+    assert detail["target_url"] == selected_url
+    assert [(step["step_type"], step["input_value"]) for step in detail["recorded_steps"]] == [("NAVIGATE", selected_url)]
 
 
 def test_extension_token_is_scoped_to_its_own_session_only(auth_client, project_slug):

@@ -651,7 +651,7 @@ class WorkflowTestCaseLink(ProjectBase):
 # steps can never change out from under it mid-execution.
 
 WORKFLOW_RUN_STATUSES = (
-    "QUEUED", "CLAIMED", "STARTING", "RUNNING", "PAUSED", "WAITING_FOR_HUMAN",
+    "WAITING_FOR_TARGET", "READY", "QUEUED", "CLAIMED", "STARTING", "RUNNING", "PAUSED", "WAITING_FOR_HUMAN",
     "RESUMING", "PASSED", "FAILED", "BLOCKED", "NOT_APPLICABLE", "CANCELLED",
     "RUNNER_LOST", "SYSTEM_ERROR",
 )
@@ -682,7 +682,7 @@ RUNNER_EXEC_EVENT_TYPES = (
     "RUN_QUEUED", "RUN_CLAIMED", "STEP_STARTED", "STEP_COMPLETED", "STEP_FAILED",
     "CHECKPOINT_WAITING", "HEARTBEAT", "RUN_CANCELLED", "RUN_COMPLETED", "RUNNER_LOST",
     # HYB-4
-    "CHECKPOINT_DECIDED", "RUN_RESUMED",
+    "CHECKPOINT_DECIDED", "RUN_RESUMED", "TARGET_ATTACHED", "EVIDENCE_UPLOADED",
 )
 
 LEASE_DURATION_SECONDS = 60
@@ -784,6 +784,22 @@ class WorkflowRun(ProjectBase):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class WorkflowRunBrowserAuthorization(ProjectBase):
+    """Short-lived credential that lets the Chrome extension execute one
+    exact WorkflowRun in one tester-selected tab. The raw token is returned
+    once in the pairing code and only its hash is persisted."""
+
+    __tablename__ = "workflow_run_browser_authorizations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    workflow_run_id = Column(Integer, ForeignKey("workflow_runs.id"), nullable=False, unique=True, index=True)
+    token_hash = Column(String, nullable=False, unique=True, index=True)
+    expires_at = Column(DateTime, nullable=False)
+    connected_at = Column(DateTime, nullable=True)
+    revoked = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class WorkflowStepRun(ProjectBase):
     """One row per (attempted) step execution -- structured, queryable
     history, distinct from the raw RunnerExecutionEvent log."""
@@ -800,8 +816,28 @@ class WorkflowStepRun(ProjectBase):
     failure_category = Column(String, nullable=True)  # see FAILURE_CATEGORIES
     machine_message = Column(Text, nullable=True)
     locator_used_json = Column(Text, nullable=True)
+    # Browser-observed action duration. Kept separately from timestamps
+    # so sub-second measurements are not lost and reports stay simple.
+    duration_ms = Column(Integer, nullable=True)
     started_at = Column(DateTime, nullable=True)
     ended_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class WorkflowRunScreenshot(ProjectBase):
+    """Immutable screenshot captured from the tester-selected tab."""
+
+    __tablename__ = "workflow_run_screenshots"
+
+    id = Column(Integer, primary_key=True, index=True)
+    workflow_run_id = Column(Integer, ForeignKey("workflow_runs.id"), nullable=False)
+    workflow_step_id = Column(Integer, ForeignKey("workflow_steps.id"), nullable=False)
+    object_key = Column(String, nullable=False)
+    content_type = Column(String, nullable=False)
+    size_bytes = Column(Integer, nullable=False)
+    sha256 = Column(String, nullable=False)
+    captured_by = Column(String, default="BROWSER_EXTENSION")
+    upload_duration_ms = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

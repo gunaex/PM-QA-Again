@@ -226,6 +226,7 @@ export const exportZipUrl = (slug, cycleId) => `${API_BASE}/${slug}/cycles/${cyc
 // Workflows (HYB-1)
 export const listWorkflows = (slug) => api.get(`/${slug}/workflows`).then((r) => r.data)
 export const createWorkflow = (slug, payload) => api.post(`/${slug}/workflows`, payload).then((r) => r.data)
+export const deleteWorkflow = (slug, workflowId) => api.delete(`/${slug}/workflows/${workflowId}`)
 export const getWorkflow = (slug, workflowId) => api.get(`/${slug}/workflows/${workflowId}`).then((r) => r.data)
 export const listWorkflowRevisions = (slug, workflowId) =>
   api.get(`/${slug}/workflows/${workflowId}/revisions`).then((r) => r.data)
@@ -262,7 +263,11 @@ export const queueWorkflowRun = (slug, workflowRevisionId, cycleTestResultId = n
   api
     .post(`/${slug}/workflow-runs`, { workflow_revision_id: workflowRevisionId, cycle_test_result_id: cycleTestResultId })
     .then((r) => r.data)
+export const prepareBrowserWorkflowRun = (slug, workflowRevisionId) =>
+  api.post(`/${slug}/workflow-runs/browser-prepare`, { workflow_revision_id: workflowRevisionId }).then((r) => r.data)
 export const getWorkflowRun = (slug, runId) => api.get(`/${slug}/workflow-runs/${runId}`).then((r) => r.data)
+export const workflowRunScreenshotUrl = (slug, runId, screenshotId) =>
+  `${API_BASE}/${slug}/workflow-runs/${runId}/screenshots/${screenshotId}`
 export const cancelWorkflowRun = (slug, runId) => api.post(`/${slug}/workflow-runs/${runId}/cancel`).then((r) => r.data)
 // Phase E: "Test It Now" -- runs a DRAFT revision without publishing it.
 // Never counted in reports/export (see backend hybrid_metrics.py).
@@ -304,6 +309,8 @@ export const insertRecordingCheckpoint = (slug, sessionId, checkpointInstruction
   api.post(`/${slug}/recording-sessions/${sessionId}/insert-checkpoint`, { checkpoint_instructions: checkpointInstructions }).then((r) => r.data)
 export const insertRecordingWait = (slug, sessionId, durationMs) =>
   api.post(`/${slug}/recording-sessions/${sessionId}/insert-wait`, { duration_ms: durationMs }).then((r) => r.data)
+export const insertRecordingScreenshotAfter = (slug, sessionId, stepId) =>
+  api.post(`/${slug}/recording-sessions/${sessionId}/steps/${stepId}/insert-screenshot-after`).then((r) => r.data)
 export const updateRecordedStep = (slug, sessionId, stepId, payload) =>
   api.put(`/${slug}/recording-sessions/${sessionId}/steps/${stepId}`, payload).then((r) => r.data)
 export const deleteRecordedStep = (slug, sessionId, stepId) =>

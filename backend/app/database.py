@@ -98,6 +98,9 @@ PROJECT_COLUMN_PATCHES: dict[str, dict[str, str]] = {
     "workflow_steps": {
         "repeat_count": "INTEGER",
     },
+    "workflow_step_runs": {
+        "duration_ms": "INTEGER",
+    },
 }
 
 # Additive index patches (docs/PERFORMANCE_FAST_PASS.md) — `CREATE INDEX
@@ -139,6 +142,7 @@ PROJECT_INDEXES: dict[str, list[str]] = {
     # HYB-2: run-list/claim/step-history/event lookups.
     "workflow_runs": ["workflow_revision_id", "status", "cycle_test_result_id"],
     "workflow_step_runs": ["workflow_run_id", "workflow_step_id"],
+    "workflow_run_screenshots": ["workflow_run_id", "workflow_step_id"],
     "runner_execution_events": ["workflow_run_id", "event_type"],
     # HYB-3: recording-session claim/list and recorded-step ordering.
     "recording_sessions": ["workflow_id", "status"],

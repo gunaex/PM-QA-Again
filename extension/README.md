@@ -1,5 +1,25 @@
 # QA-Again Recorder (Chrome Extension)
 
+The extension supports both **Record** and **Run Test**. Run Test waits for
+the tester to select a normal browser tab and explicitly press Start in a
+draggable controller; preparing a run never clicks or types by itself.
+
+## Run a test in an existing tab
+
+1. In QA-Again, open an Automated Test and press **Run Test**.
+2. Copy the test pairing code. The run is `WAITING_FOR_TARGET`; nothing has
+   executed yet.
+3. Switch to the target application tab, open this extension, paste the code,
+   and press **Use This Tab**.
+4. Move the floating QA-Again controller if needed, then press **Start Test**.
+5. Press **Cancel** at any time. The extension permits only one active
+   playback, preventing duplicate or looping runs.
+
+The one-run pairing credential expires after 15 minutes, remains only in
+`chrome.storage.session`, and is revoked on completion or cancellation.
+Sensitive FILL actions request the value inside the target tab at execution
+time; that entered value is never sent to QA-Again.
+
 Everyday recording mode — see `docs/adr/ADR-HYB-002-chrome-extension-recorder.md`
 and `docs/hybrid/CHROME_EXTENSION_RECORDER.md` for the full design. The
 existing Playwright-controlled recorder (`runner/`, `npm run record`)

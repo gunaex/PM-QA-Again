@@ -54,37 +54,50 @@ def _require_draft(revision: models.WorkflowRevision):
 
 
 def _validate_step_fields(step_type: str, fields: dict):
+    """Every message here is shown directly to a tester (in the step
+    form, or per-step during Save as Draft Review -- see
+    recording_sessions.py's save_as_draft, which prefixes these with
+    the step number/description) -- so each one states what's missing
+    AND what to do about it, not just the technical field name."""
     if step_type not in models.WORKFLOW_STEP_TYPES:
-        raise HTTPException(status_code=400, detail=f"step_type must be one of {models.WORKFLOW_STEP_TYPES}")
+        raise HTTPException(status_code=400, detail=f"'{step_type}' isn't a recognized step type. Must be one of: {', '.join(models.WORKFLOW_STEP_TYPES)}.")
 
     locator_strategy = fields.get("locator_strategy")
     locator_value = fields.get("locator_value")
     if step_type in _LOCATOR_REQUIRED_TYPES:
         if not locator_strategy or not locator_value:
-            raise HTTPException(status_code=400, detail=f"{step_type} requires locator_strategy and locator_value")
+            raise HTTPException(
+                status_code=400,
+                detail=f"This {step_type} step is missing which element on the page to act on. Pick a locator strategy and enter a value, or delete this step.",
+            )
         if locator_strategy not in models.LOCATOR_STRATEGIES:
-            raise HTTPException(status_code=400, detail=f"locator_strategy must be one of {models.LOCATOR_STRATEGIES}")
+            raise HTTPException(status_code=400, detail=f"'{locator_strategy}' isn't a recognized locator type. Must be one of: {', '.join(models.LOCATOR_STRATEGIES)}.")
 
     if step_type == "NAVIGATE" and not (fields.get("input_value") or "").strip():
-        raise HTTPException(status_code=400, detail="NAVIGATE requires input_value (a URL)")
+        raise HTTPException(status_code=400, detail="This step needs a URL to go to, but the field is empty. Enter a URL, or delete this step.")
 
     if step_type in ("FILL", "SELECT") and not (fields.get("input_value") or "").strip():
-        raise HTTPException(status_code=400, detail=f"{step_type} requires input_value")
+        verb = "type into" if step_type == "FILL" else "choose in"
+        raise HTTPException(
+            status_code=400,
+            detail=f"This step needs a value to {verb} the field, but it's empty. Enter a value, or delete this step.",
+        )
 
     if step_type in ("ASSERT_TEXT", "ASSERT_URL") and not (fields.get("expected_value") or "").strip():
-        raise HTTPException(status_code=400, detail=f"{step_type} requires expected_value")
+        what = "text" if step_type == "ASSERT_TEXT" else "URL"
+        raise HTTPException(status_code=400, detail=f"This step needs the {what} to check for, but the field is empty. Enter a value, or delete this step.")
 
     if step_type == "MANUAL_CHECKPOINT" and not (fields.get("checkpoint_instructions") or "").strip():
-        raise HTTPException(status_code=400, detail="MANUAL_CHECKPOINT requires checkpoint_instructions")
+        raise HTTPException(status_code=400, detail="This checkpoint needs instructions for the human tester, but the field is empty. Enter instructions, or delete this step.")
 
     if step_type == "WAIT":
         raw = (fields.get("input_value") or "").strip()
         if not raw.isdigit() or int(raw) <= 0:
-            raise HTTPException(status_code=400, detail="WAIT requires input_value to be a positive number of milliseconds")
+            raise HTTPException(status_code=400, detail="This wait step needs a positive number of milliseconds (e.g. 2000 for 2 seconds), but the value entered isn't valid.")
 
     repeat_count = fields.get("repeat_count")
     if repeat_count is not None and (not isinstance(repeat_count, int) or repeat_count < 1):
-        raise HTTPException(status_code=400, detail="repeat_count must be a positive integer (or omitted)")
+        raise HTTPException(status_code=400, detail="The repeat count must be a whole number of 1 or more (or left blank to run once).")
 
     # The sensitive-value rule: never a literal, always "${VAR_NAME}".
     if fields.get("is_sensitive"):
@@ -92,12 +105,12 @@ def _validate_step_fields(step_type: str, fields: dict):
         if not _VARIABLE_REF.match(value):
             raise HTTPException(
                 status_code=400,
-                detail='A sensitive step\'s input_value must be a variable placeholder like "${SECRET_LOGIN_PASSWORD}", '
-                "never a literal value.",
+                detail='This is a sensitive field (like a password), so it needs a placeholder name like "${SECRET_LOGIN_PASSWORD}" '
+                "instead of a real value. Enter a placeholder name, or delete this step.",
             )
 
     if fields.get("evidence_policy") and fields["evidence_policy"] not in models.EVIDENCE_POLICIES:
-        raise HTTPException(status_code=400, detail=f"evidence_policy must be one of {models.EVIDENCE_POLICIES}")
+        raise HTTPException(status_code=400, detail=f"'{fields['evidence_policy']}' isn't a recognized evidence option. Must be one of: {', '.join(models.EVIDENCE_POLICIES)}.")
 
 
 # ---------- Workflow definitions ----------
@@ -105,7 +118,9 @@ def _validate_step_fields(step_type: str, fields: dict):
 
 @router.get("", response_model=list[schemas.WorkflowDefinitionOut])
 def list_workflows(slug: str, db: Session = Depends(get_project_db)):
-    workflows = db.query(models.WorkflowDefinition).order_by(models.WorkflowDefinition.created_at.desc()).all()
+    workflows = db.query(models.WorkflowDefinition).filter(
+        models.WorkflowDefinition.status == "ACTIVE"
+    ).order_by(models.WorkflowDefinition.created_at.desc()).all()
     out = []
     for w in workflows:
         item = schemas.WorkflowDefinitionOut.model_validate(w)
@@ -138,6 +153,26 @@ def create_workflow(
 @router.get("/{workflow_id}", response_model=schemas.WorkflowDefinitionOut)
 def get_workflow(slug: str, workflow_id: int, db: Session = Depends(get_project_db)):
     return _get_workflow(db, workflow_id)
+
+
+@router.delete("/{workflow_id}", status_code=204)
+def delete_workflow(
+    slug: str,
+    workflow_id: int,
+    db: Session = Depends(get_project_db),
+    _user: models.User = Depends(require_tester),
+):
+    """Removes a test from the main screen without erasing QA history."""
+    workflow = _get_workflow(db, workflow_id)
+    active_recording = db.query(models.RecordingSession).filter(
+        models.RecordingSession.workflow_id == workflow_id,
+        models.RecordingSession.status.in_(("REQUESTED", "CLAIMED", "RECORDING", "PAUSED")),
+    ).first()
+    if active_recording:
+        raise HTTPException(status_code=409, detail="Stop or discard the active recording before deleting this test")
+    workflow.status = "ARCHIVED"
+    db.commit()
+    return None
 
 
 # ---------- Workflow revisions ----------

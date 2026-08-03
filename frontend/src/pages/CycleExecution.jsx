@@ -49,6 +49,10 @@ export default function CycleExecution() {
   const [detailCache, setDetailCache] = useState({})
   const [detailLoadingId, setDetailLoadingId] = useState(null)
   const detailRequestSeq = useRef(0)
+  // Captures a status-button click synchronously. This prevents a rapid
+  // PASS -> Save & Next sequence from re-submitting the stale NOT_RUN
+  // status before React has rendered the saved response.
+  const intendedStatusRef = useRef({})
 
   const load = () => {
     setLoading(true)
@@ -119,6 +123,7 @@ export default function CycleExecution() {
 
   const submitStatus = async (status) => {
     if (!selected) return false
+    intendedStatusRef.current[selected.id] = status
     const payload = {
       status,
       actual_result_md: draft.actual_result_md ?? selected.actual_result_md ?? '',
@@ -166,7 +171,8 @@ export default function CycleExecution() {
   // a fresh PASS/FAIL/BLOCKED/N-A click first, then advances to the
   // next case — the common "I already marked this, just move on" path.
   const handleSaveAndNext = async () => {
-    const ok = await submitStatus(selected.status)
+    const intendedStatus = intendedStatusRef.current[selected.id] || selected.status
+    const ok = await submitStatus(intendedStatus)
     if (ok) goToNextCase()
   }
 
@@ -314,7 +320,8 @@ export default function CycleExecution() {
           </div>
         </div>
 
-        {/* Completion summary -- shown after Save & Next moves past the last case */}
+        {/* Keep the saved case visible below this summary. Hiding the
+            detail panel made a successful final save look like data loss. */}
         {showCompletion && (
           <div className="bg-white border border-emerald-200 rounded-lg p-6 text-center space-y-3">
             <p className="text-lg font-semibold text-gray-900">All cases reached 🎉</p>
@@ -326,13 +333,13 @@ export default function CycleExecution() {
               ))}
             </div>
             <button onClick={() => setShowCompletion(false)} className="text-sm text-emerald-600 hover:underline">
-              Review cases again
+              Dismiss summary
             </button>
           </div>
         )}
 
         {/* Main panel */}
-        {selected && !showCompletion && (
+        {selected && (
           <div className="bg-white border border-gray-200 rounded-lg p-5 space-y-4">
             <div>
               <div className="flex items-center gap-2 flex-wrap">

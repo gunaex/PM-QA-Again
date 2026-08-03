@@ -6,7 +6,7 @@ import type { RunnerConfig } from "../env.js";
 // contract this implements.
 
 export type WorkflowRunStatus =
-  | "QUEUED" | "CLAIMED" | "STARTING" | "RUNNING" | "PAUSED" | "WAITING_FOR_HUMAN"
+  | "WAITING_FOR_TARGET" | "READY" | "QUEUED" | "CLAIMED" | "STARTING" | "RUNNING" | "PAUSED" | "WAITING_FOR_HUMAN"
   | "RESUMING" | "PASSED" | "FAILED" | "BLOCKED" | "NOT_APPLICABLE" | "CANCELLED"
   | "RUNNER_LOST" | "SYSTEM_ERROR";
 

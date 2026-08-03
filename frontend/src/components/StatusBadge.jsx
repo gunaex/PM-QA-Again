@@ -24,6 +24,7 @@ const STYLES = {
   ACCEPTED: 'bg-green-100 text-green-700',
   CHANGES_REQUESTED: 'bg-red-100 text-red-700',
   // Workflow runs (HYB-2/HYB-4)
+  WAITING_FOR_TARGET: 'bg-amber-100 text-amber-800',
   QUEUED: 'bg-gray-100 text-gray-600',
   CLAIMED: 'bg-blue-100 text-blue-700',
   STARTING: 'bg-blue-100 text-blue-700',
@@ -37,7 +38,7 @@ const STYLES = {
 }
 
 export default function StatusBadge({ status }) {
-  const label = status === 'QUEUED' ? 'PREPARING' : status === 'RUNNER_LOST' ? 'SESSION LOST' : status
+  const label = status === 'WAITING_FOR_TARGET' ? 'CHOOSE TARGET' : status === 'QUEUED' ? 'PREPARING' : status === 'RUNNER_LOST' ? 'SESSION LOST' : status
   return (
     <span className={`px-2 py-0.5 rounded-full text-xs ${STYLES[status] || 'bg-gray-100 text-gray-600'}`}>
       {label}

@@ -208,6 +208,26 @@ def test_hyb1_full_acceptance_gate(auth_client, project_slug):
         db.close()
 
 
+def test_delete_workflow_hides_it_but_keeps_history(auth_client, project_slug):
+    slug = project_slug
+    workflow = auth_client.post(f"/api/{slug}/workflows", json={"name": "delete from main screen"}).json()
+    revision = auth_client.post(
+        f"/api/{slug}/workflows/{workflow['id']}/revisions", json={"revision_label": "v1"}
+    ).json()
+    auth_client.post(
+        f"/api/{slug}/workflows/{workflow['id']}/revisions/{revision['id']}/steps",
+        json={"step_type": "SCREENSHOT"},
+    )
+    auth_client.post(f"/api/{slug}/workflows/{workflow['id']}/revisions/{revision['id']}/publish")
+
+    deleted = auth_client.delete(f"/api/{slug}/workflows/{workflow['id']}")
+    assert deleted.status_code == 204, deleted.text
+    assert workflow["id"] not in [item["id"] for item in auth_client.get(f"/api/{slug}/workflows").json()]
+    preserved = auth_client.get(f"/api/{slug}/workflows/{workflow['id']}/revisions")
+    assert preserved.status_code == 200
+    assert preserved.json()[0]["id"] == revision["id"]
+
+
 def test_workflow_revision_label_must_be_unique_per_workflow(auth_client, project_slug):
     slug = project_slug
     wf = auth_client.post(f"/api/{slug}/workflows", json={"name": "dup test"}).json()

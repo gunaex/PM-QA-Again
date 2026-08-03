@@ -3,6 +3,8 @@
 // asked for. Shared between WorkflowDetail's real-run view and
 // RecordingPanel's Phase E "Test It Now" preview-run view.
 const RUN_BANNER = {
+  WAITING_FOR_TARGET: { icon: '◎', label: 'CHOOSE TARGET TAB', tone: 'bg-amber-50 border-amber-200 text-amber-800' },
+  READY: { icon: '✋', label: 'READY — PRESS START IN TARGET TAB', tone: 'bg-amber-50 border-amber-200 text-amber-800' },
   QUEUED: { icon: '⏳', label: 'PREPARING BROWSER', tone: 'bg-blue-50 border-blue-200 text-blue-800' },
   CLAIMED: { icon: '⏳', label: 'STARTING TEST', tone: 'bg-blue-50 border-blue-200 text-blue-800' },
   STARTING: { icon: '⏳', label: 'STARTING TEST', tone: 'bg-blue-50 border-blue-200 text-blue-800' },

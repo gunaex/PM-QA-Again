@@ -19,28 +19,34 @@ Job protocol (docs/Autonomous hybird prompt.md's HYB-2 section):
      key so a retried POST after a network blip is a no-op, not a
      duplicate.
 """
+import base64
+import binascii
 import hashlib
+import json
 import logging
+import os
+import secrets
 import time
 import uuid
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Response
 from sqlalchemy.orm import Session
 
 from .. import models, schemas
 from ..database import get_project_db, get_master_db
 from ..evidence_utils import sniff_image, MAX_EVIDENCE_SIZE_BYTES
-from ..auth import get_current_user, require_tester, require_admin, get_current_runner, _hash_token
+from ..auth import get_current_user, require_tester, require_admin, get_current_runner, issue_runner_token, _hash_token
 from ..quota import quota_status
 from ..rate_limit import limiter
 from ..storage import EvidenceStorage, get_evidence_storage
-from ..execution_dispatch import ExecutionDispatchError, dispatch_workflow_run
+from ..execution_dispatch import ExecutionDispatchError, dispatch_workflow_run, execution_provider
 from .workflows import _validate_step_fields
 
 logger = logging.getLogger("workflow_runs")
 
 router = APIRouter(prefix="/api/{slug}/workflow-runs", tags=["workflow-runs"])
+BROWSER_AUTH_TTL = timedelta(minutes=15)
 
 
 # ---------- shared helpers ----------
@@ -132,25 +138,341 @@ def _to_run_out(db: Session, run: models.WorkflowRun) -> schemas.WorkflowRunOut:
     return out
 
 
-def _dispatch_queued_run(db: Session, slug: str, run: models.WorkflowRun) -> None:
+def _browser_authorization(db: Session, run: models.WorkflowRun, raw_token: str) -> models.WorkflowRunBrowserAuthorization:
+    authorization = (
+        db.query(models.WorkflowRunBrowserAuthorization)
+        .filter(
+            models.WorkflowRunBrowserAuthorization.workflow_run_id == run.id,
+            models.WorkflowRunBrowserAuthorization.token_hash == _hash_token(raw_token),
+            models.WorkflowRunBrowserAuthorization.revoked.is_(False),
+        )
+        .first()
+    )
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Invalid or revoked browser-test pairing code")
+    if authorization.expires_at < datetime.utcnow():
+        authorization.revoked = True
+        if run.status in ("WAITING_FOR_TARGET", "READY"):
+            run.status = "SYSTEM_ERROR"
+            run.result_summary = "The browser-test pairing code expired before the test started"
+            run.ended_at = datetime.utcnow()
+            _add_event(db, run.id, "RUN_COMPLETED", "SYSTEM", payload_json='{"status":"SYSTEM_ERROR","source":"pairing_expired"}')
+        db.commit()
+        raise HTTPException(status_code=401, detail="Browser-test pairing code expired; prepare the test again")
+    return authorization
+
+
+def _browser_plan_steps(db: Session, run: models.WorkflowRun) -> list[models.WorkflowStep]:
+    return (
+        db.query(models.WorkflowStep)
+        .filter(models.WorkflowStep.revision_id == run.workflow_revision_id, models.WorkflowStep.enabled.is_(True))
+        .order_by(models.WorkflowStep.sequence_no)
+        .all()
+    )
+
+
+def _dispatch_queued_run(db: Session, master_db: Session, slug: str, run: models.WorkflowRun) -> None:
     """Start ephemeral cloud execution when configured.
 
     Dispatch happens only after the QUEUED transaction is durable. A provider
     failure is recorded honestly as SYSTEM_ERROR instead of leaving a job that
     appears to be preparing forever.
     """
+    runner_token = None
+    runner_token_id = None
     try:
-        dispatch_workflow_run(slug, run.id)
+        if execution_provider() == "embedded":
+            runner_token, token_record = issue_runner_token(master_db, f"one-shot local browser run {slug}/{run.id}")
+            runner_token_id = token_record.id
+        dispatch_workflow_run(slug, run.id, runner_token=runner_token, runner_token_id=runner_token_id)
     except ExecutionDispatchError as exc:
         run.status = "SYSTEM_ERROR"
         run.result_summary = str(exc)
         run.ended_at = datetime.utcnow()
         db.commit()
         logger.exception("Could not dispatch workflow run %s/%s", slug, run.id)
-        raise HTTPException(status_code=503, detail="Cloud test execution is temporarily unavailable. Please try again.") from exc
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 # ---------- queue / list / detail (human + runner reads) ----------
+
+
+@router.post("/browser-prepare", response_model=schemas.WorkflowBrowserPrepareOut)
+def prepare_browser_run(
+    slug: str,
+    payload: schemas.WorkflowBrowserPrepareRequest,
+    request: Request,
+    db: Session = Depends(get_project_db),
+    user: models.User = Depends(require_tester),
+):
+    """Prepare extension playback without executing anything yet.
+
+    The tester explicitly selects a normal browser tab and presses Start in
+    the injected floating controller. Until then the run stays
+    WAITING_FOR_TARGET and no page receives automated input.
+    """
+    revision = db.query(models.WorkflowRevision).filter(models.WorkflowRevision.id == payload.workflow_revision_id).first()
+    if not revision:
+        raise HTTPException(status_code=404, detail="Workflow revision not found")
+    steps = _browser_plan_steps(db, models.WorkflowRun(workflow_revision_id=revision.id))
+    if not steps:
+        raise HTTPException(status_code=400, detail="Cannot run a revision with no enabled actions")
+    for step in steps:
+        _validate_step_fields(
+            step.step_type,
+            {
+                "locator_strategy": step.locator_strategy,
+                "locator_value": step.locator_value,
+                "input_value": step.input_value,
+                "expected_value": step.expected_value,
+                "checkpoint_instructions": step.checkpoint_instructions,
+                "is_sensitive": step.is_sensitive,
+                "evidence_policy": step.evidence_policy,
+                "repeat_count": step.repeat_count,
+            },
+        )
+
+    run = models.WorkflowRun(
+        workflow_revision_id=revision.id,
+        status="WAITING_FOR_TARGET",
+        queued_by=user.email,
+        is_preview=revision.status != "PUBLISHED",
+    )
+    db.add(run)
+    db.flush()
+    raw_token = secrets.token_urlsafe(32)
+    expires_at = datetime.utcnow() + BROWSER_AUTH_TTL
+    db.add(
+        models.WorkflowRunBrowserAuthorization(
+            workflow_run_id=run.id,
+            token_hash=_hash_token(raw_token),
+            expires_at=expires_at,
+        )
+    )
+    _add_event(db, run.id, "RUN_QUEUED", "HUMAN", payload_json='{"mode":"browser_extension"}')
+    db.commit()
+    db.refresh(run)
+
+    backend_url = os.environ.get("PUBLIC_BACKEND_URL", "").strip() or str(request.base_url).rstrip("/")
+    pairing_payload = {
+        "mode": "playback",
+        "backendUrl": backend_url,
+        "projectSlug": slug,
+        "runId": run.id,
+        "token": raw_token,
+    }
+    pairing_code = base64.b64encode(json.dumps(pairing_payload, separators=(",", ":")).encode()).decode()
+    return schemas.WorkflowBrowserPrepareOut(run=_to_run_out(db, run), pairing_code=pairing_code, expires_at=expires_at)
+
+
+@router.post("/{run_id}/browser-connect", response_model=schemas.WorkflowBrowserPlanOut)
+def connect_browser_run(
+    slug: str,
+    run_id: int,
+    payload: schemas.WorkflowBrowserTokenRequest,
+    db: Session = Depends(get_project_db),
+):
+    run = _get_run(db, run_id)
+    authorization = _browser_authorization(db, run, payload.extension_token)
+    if run.status not in ("WAITING_FOR_TARGET", "READY"):
+        raise HTTPException(status_code=409, detail=f"This test cannot attach to a tab (status: {run.status})")
+    if run.status == "WAITING_FOR_TARGET":
+        run.status = "READY"
+        authorization.connected_at = datetime.utcnow()
+        _add_event(db, run.id, "TARGET_ATTACHED", "RUNNER")
+        db.commit()
+        db.refresh(run)
+    return schemas.WorkflowBrowserPlanOut(
+        run=_to_run_out(db, run),
+        steps=[schemas.WorkflowRunClaimStep.model_validate(step) for step in _browser_plan_steps(db, run)],
+    )
+
+
+@router.post("/{run_id}/browser-start", response_model=schemas.WorkflowRunOut)
+def start_browser_run(
+    slug: str,
+    run_id: int,
+    payload: schemas.WorkflowBrowserTokenRequest,
+    db: Session = Depends(get_project_db),
+):
+    run = _get_run(db, run_id)
+    _browser_authorization(db, run, payload.extension_token)
+    if run.status not in ("READY", "RUNNING"):
+        raise HTTPException(status_code=409, detail=f"Select a target tab before starting (status: {run.status})")
+    if run.status == "READY":
+        run.status = "RUNNING"
+        run.started_at = datetime.utcnow()
+        _add_event(db, run.id, "RUN_CLAIMED", "RUNNER", payload_json='{"mode":"browser_extension"}')
+        db.commit()
+        db.refresh(run)
+    return _to_run_out(db, run)
+
+
+@router.post("/{run_id}/browser-status", response_model=schemas.WorkflowRunOut)
+def browser_run_status(
+    slug: str,
+    run_id: int,
+    payload: schemas.WorkflowBrowserTokenRequest,
+    db: Session = Depends(get_project_db),
+):
+    run = _get_run(db, run_id)
+    _browser_authorization(db, run, payload.extension_token)
+    return _to_run_out(db, run)
+
+
+@router.post("/{run_id}/browser-step", response_model=schemas.WorkflowStepRunOut)
+def report_browser_step(
+    slug: str,
+    run_id: int,
+    payload: schemas.WorkflowBrowserStepResultRequest,
+    db: Session = Depends(get_project_db),
+):
+    run = _get_run(db, run_id)
+    _browser_authorization(db, run, payload.extension_token)
+    if run.status != "RUNNING":
+        raise HTTPException(status_code=409, detail=f"This browser test is not running (status: {run.status})")
+    if payload.status not in ("PASSED", "FAILED", "SKIPPED"):
+        raise HTTPException(status_code=400, detail="Browser step status must be PASSED, FAILED, or SKIPPED")
+    if payload.failure_category and payload.failure_category not in models.FAILURE_CATEGORIES:
+        raise HTTPException(status_code=400, detail=f"failure_category must be one of {models.FAILURE_CATEGORIES}")
+    if payload.duration_ms is not None and (payload.duration_ms < 0 or payload.duration_ms > 86_400_000):
+        raise HTTPException(status_code=400, detail="duration_ms must be between 0 and 86400000")
+    step = db.query(models.WorkflowStep).filter(
+        models.WorkflowStep.id == payload.workflow_step_id,
+        models.WorkflowStep.revision_id == run.workflow_revision_id,
+    ).first()
+    if not step:
+        raise HTTPException(status_code=404, detail="Workflow step not found on this run's revision")
+    existing = db.query(models.WorkflowStepRun).filter(
+        models.WorkflowStepRun.workflow_run_id == run.id,
+        models.WorkflowStepRun.workflow_step_id == step.id,
+        models.WorkflowStepRun.attempt_number == payload.attempt_number,
+    ).first()
+    if existing:
+        out = schemas.WorkflowStepRunOut.model_validate(existing)
+        out.step_type = step.step_type
+        out.step_description = step.description
+        return out
+    now = datetime.utcnow()
+    started_at = now - timedelta(milliseconds=payload.duration_ms or 0)
+    step_run = models.WorkflowStepRun(
+        workflow_run_id=run.id,
+        workflow_step_id=step.id,
+        sequence_no=step.sequence_no,
+        attempt_number=payload.attempt_number,
+        status=payload.status,
+        outcome=payload.outcome,
+        failure_category=payload.failure_category,
+        machine_message=payload.machine_message,
+        locator_used_json=payload.locator_used_json,
+        duration_ms=payload.duration_ms,
+        started_at=started_at,
+        ended_at=now,
+    )
+    db.add(step_run)
+    event_type = "STEP_FAILED" if payload.status == "FAILED" else "STEP_COMPLETED"
+    _add_event(db, run.id, event_type, "RUNNER", payload_json=f'{{"workflow_step_id":{step.id},"status":"{payload.status}"}}')
+    db.commit()
+    db.refresh(step_run)
+    out = schemas.WorkflowStepRunOut.model_validate(step_run)
+    out.step_type = step.step_type
+    out.step_description = step.description
+    return out
+
+
+@router.post("/{run_id}/browser-screenshot", response_model=schemas.WorkflowRunScreenshotOut)
+def upload_browser_screenshot(
+    slug: str,
+    run_id: int,
+    payload: schemas.WorkflowBrowserScreenshotRequest,
+    db: Session = Depends(get_project_db),
+    master_db: Session = Depends(get_master_db),
+    storage: EvidenceStorage = Depends(get_evidence_storage),
+):
+    """Stores one visible-tab PNG captured by the paired extension."""
+    upload_started = time.perf_counter()
+    run = _get_run(db, run_id)
+    _browser_authorization(db, run, payload.extension_token)
+    if run.status != "RUNNING":
+        raise HTTPException(status_code=409, detail=f"This browser test is not running (status: {run.status})")
+    step = db.query(models.WorkflowStep).filter(
+        models.WorkflowStep.id == payload.workflow_step_id,
+        models.WorkflowStep.revision_id == run.workflow_revision_id,
+    ).first()
+    if not step:
+        raise HTTPException(status_code=404, detail="Workflow step not found on this run's revision")
+    prefix = "data:image/png;base64,"
+    if not payload.data_url.startswith(prefix):
+        raise HTTPException(status_code=400, detail="Screenshot must be a PNG data URL")
+    try:
+        content = base64.b64decode(payload.data_url[len(prefix):], validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise HTTPException(status_code=400, detail="Screenshot data is not valid base64") from exc
+    if not content or len(content) > MAX_EVIDENCE_SIZE_BYTES:
+        raise HTTPException(status_code=400, detail=f"Screenshot must be between 1 byte and {MAX_EVIDENCE_SIZE_BYTES // (1024 * 1024)}MB")
+    if sniff_image(content) != ("image/png", "png"):
+        raise HTTPException(status_code=400, detail="Screenshot is not a valid PNG")
+
+    project = master_db.query(models.Project).filter(models.Project.slug == slug).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if quota_status(project, db)["used_bytes"] + len(content) > project.storage_quota_bytes:
+        raise HTTPException(status_code=400, detail="Uploading this screenshot would exceed the project's storage quota")
+
+    digest = hashlib.sha256(content).hexdigest()
+    existing = db.query(models.WorkflowRunScreenshot).filter(
+        models.WorkflowRunScreenshot.workflow_run_id == run.id,
+        models.WorkflowRunScreenshot.workflow_step_id == step.id,
+        models.WorkflowRunScreenshot.sha256 == digest,
+    ).first()
+    if existing:
+        return existing
+    object_key = f"workflow-screenshots/{slug}/{run.id}/{uuid.uuid4().hex}.png"
+    storage.put(object_key, content, "image/png")
+    item = models.WorkflowRunScreenshot(
+        workflow_run_id=run.id,
+        workflow_step_id=step.id,
+        object_key=object_key,
+        content_type="image/png",
+        size_bytes=len(content),
+        sha256=digest,
+        upload_duration_ms=round((time.perf_counter() - upload_started) * 1000),
+    )
+    try:
+        db.add(item)
+        db.commit()
+        db.refresh(item)
+    except Exception:
+        db.rollback()
+        storage.delete(object_key)
+        raise
+    _add_event(db, run.id, "EVIDENCE_UPLOADED", "RUNNER", payload_json=f'{{"screenshot_id":{item.id},"workflow_step_id":{step.id}}}')
+    db.commit()
+    return item
+
+
+@router.post("/{run_id}/browser-complete", response_model=schemas.WorkflowRunOut)
+def complete_browser_run(
+    slug: str,
+    run_id: int,
+    payload: schemas.WorkflowBrowserCompleteRequest,
+    db: Session = Depends(get_project_db),
+):
+    run = _get_run(db, run_id)
+    authorization = _browser_authorization(db, run, payload.extension_token)
+    allowed = {"PASSED", "FAILED", "CANCELLED", "BLOCKED", "SYSTEM_ERROR"}
+    if payload.status not in allowed:
+        raise HTTPException(status_code=400, detail=f"status must be one of {sorted(allowed)}")
+    if run.status not in models.WORKFLOW_RUN_TERMINAL_STATUSES:
+        run.status = payload.status
+        run.result_summary = payload.result_summary
+        run.ended_at = datetime.utcnow()
+        run.cancel_requested = False
+        _add_event(db, run.id, "RUN_COMPLETED", "RUNNER", payload_json=f'{{"status":"{payload.status}","mode":"browser_extension"}}')
+    authorization.revoked = True
+    db.commit()
+    db.refresh(run)
+    return _to_run_out(db, run)
 
 
 @router.post("", response_model=schemas.WorkflowRunOut)
@@ -158,6 +480,7 @@ def queue_run(
     slug: str,
     payload: schemas.WorkflowRunCreate,
     db: Session = Depends(get_project_db),
+    master_db: Session = Depends(get_master_db),
     user: models.User = Depends(require_tester),
 ):
     revision = db.query(models.WorkflowRevision).filter(models.WorkflowRevision.id == payload.workflow_revision_id).first()
@@ -181,7 +504,7 @@ def queue_run(
     _add_event(db, run.id, "RUN_QUEUED", "HUMAN")
     db.commit()
     db.refresh(run)
-    _dispatch_queued_run(db, slug, run)
+    _dispatch_queued_run(db, master_db, slug, run)
     return _to_run_out(db, run)
 
 
@@ -190,6 +513,7 @@ def preview_run(
     slug: str,
     payload: schemas.WorkflowPreviewRunCreate,
     db: Session = Depends(get_project_db),
+    master_db: Session = Depends(get_master_db),
     user: models.User = Depends(require_tester),
 ):
     """Phase E: a tester's own "Test It Now" sanity check -- runs through
@@ -241,7 +565,7 @@ def preview_run(
     _add_event(db, run.id, "RUN_QUEUED", "HUMAN")
     db.commit()
     db.refresh(run)
-    _dispatch_queued_run(db, slug, run)
+    _dispatch_queued_run(db, master_db, slug, run)
     return _to_run_out(db, run)
 
 
@@ -298,6 +622,9 @@ def _build_run_detail(db: Session, run: models.WorkflowRun) -> schemas.WorkflowR
     out = schemas.WorkflowRunDetailOut.model_validate(_to_run_out(db, run))
     out.step_runs = step_run_outs
     out.events = events
+    out.screenshots = db.query(models.WorkflowRunScreenshot).filter(
+        models.WorkflowRunScreenshot.workflow_run_id == run.id,
+    ).order_by(models.WorkflowRunScreenshot.id).all()
     return out
 
 
@@ -309,17 +636,42 @@ def get_run(slug: str, run_id: int, request: Request, db: Session = Depends(get_
     return _build_run_detail(db, run)
 
 
+@router.get("/{run_id}/screenshots/{screenshot_id}")
+def get_run_screenshot(
+    slug: str, run_id: int, screenshot_id: int,
+    db: Session = Depends(get_project_db),
+    storage: EvidenceStorage = Depends(get_evidence_storage),
+    _user: models.User = Depends(get_current_user),
+):
+    _get_run(db, run_id)
+    item = db.query(models.WorkflowRunScreenshot).filter(
+        models.WorkflowRunScreenshot.id == screenshot_id,
+        models.WorkflowRunScreenshot.workflow_run_id == run_id,
+    ).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Screenshot not found")
+    try:
+        content = storage.get(item.object_key)
+    except (FileNotFoundError, KeyError) as exc:
+        raise HTTPException(status_code=404, detail="Screenshot file is missing") from exc
+    return Response(content=content, media_type=item.content_type, headers={"Cache-Control": "private, max-age=300"})
+
+
 @router.post("/{run_id}/cancel", response_model=schemas.WorkflowRunOut, dependencies=[Depends(get_current_user)])
 def cancel_run(slug: str, run_id: int, db: Session = Depends(get_project_db), user: models.User = Depends(require_tester)):
     _expire_stale_leases(db)
     run = _get_run(db, run_id)
     if run.status in models.WORKFLOW_RUN_TERMINAL_STATUSES:
         raise HTTPException(status_code=400, detail=f"Run already ended (status: {run.status})")
-    if run.status == "QUEUED":
-        # Never claimed -- no runner to cooperate with, cancel outright.
+    if run.status in ("QUEUED", "WAITING_FOR_TARGET", "READY"):
+        # Never started -- no browser process/extension loop to cooperate
+        # with, so cancel outright and revoke any pending pairing code.
         run.status = "CANCELLED"
         run.ended_at = datetime.utcnow()
         _add_event(db, run.id, "RUN_CANCELLED", "HUMAN", payload_json=f'{{"cancelled_by":"{user.email}"}}')
+        db.query(models.WorkflowRunBrowserAuthorization).filter(
+            models.WorkflowRunBrowserAuthorization.workflow_run_id == run.id
+        ).update({"revoked": True})
     else:
         # Claimed/running/waiting -- ask the runner to stop cooperatively;
         # it observes cancel_requested and calls /complete itself. See

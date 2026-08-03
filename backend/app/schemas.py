@@ -784,6 +784,35 @@ class WorkflowPreviewRunCreate(BaseModel):
     workflow_revision_id: int
 
 
+class WorkflowBrowserPrepareRequest(BaseModel):
+    workflow_revision_id: int
+
+
+class WorkflowBrowserTokenRequest(BaseModel):
+    extension_token: str
+
+
+class WorkflowBrowserStepResultRequest(WorkflowBrowserTokenRequest):
+    workflow_step_id: int
+    attempt_number: int = 1
+    status: str
+    outcome: Optional[str] = None
+    failure_category: Optional[str] = None
+    machine_message: Optional[str] = None
+    locator_used_json: Optional[str] = None
+    duration_ms: Optional[int] = None
+
+
+class WorkflowBrowserScreenshotRequest(WorkflowBrowserTokenRequest):
+    workflow_step_id: int
+    data_url: str
+
+
+class WorkflowBrowserCompleteRequest(WorkflowBrowserTokenRequest):
+    status: str
+    result_summary: Optional[str] = None
+
+
 class WorkflowRunOut(BaseModel):
     id: int
     workflow_revision_id: int
@@ -819,6 +848,7 @@ class WorkflowStepRunOut(BaseModel):
     failure_category: Optional[str] = None
     machine_message: Optional[str] = None
     locator_used_json: Optional[str] = None
+    duration_ms: Optional[int] = None
     started_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
     created_at: datetime
@@ -852,9 +882,25 @@ class RunnerExecutionEventOut(BaseModel):
         from_attributes = True
 
 
+class WorkflowRunScreenshotOut(BaseModel):
+    id: int
+    workflow_run_id: int
+    workflow_step_id: int
+    content_type: str
+    size_bytes: int
+    sha256: str
+    captured_by: str
+    upload_duration_ms: Optional[int] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 class WorkflowRunDetailOut(WorkflowRunOut):
     step_runs: list[WorkflowStepRunOut] = []
     events: list[RunnerExecutionEventOut] = []
+    screenshots: list[WorkflowRunScreenshotOut] = []
 
 
 class WorkflowRunClaimStep(BaseModel):
@@ -875,6 +921,17 @@ class WorkflowRunClaimStep(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class WorkflowBrowserPrepareOut(BaseModel):
+    run: WorkflowRunOut
+    pairing_code: str
+    expires_at: datetime
+
+
+class WorkflowBrowserPlanOut(BaseModel):
+    run: WorkflowRunOut
+    steps: list[WorkflowRunClaimStep]
 
 
 class WorkflowRunClaimOut(BaseModel):
@@ -1071,6 +1128,7 @@ class ExtensionAuthorizationOut(BaseModel):
 
 class ExtensionConnectRequest(BaseModel):
     extension_token: str
+    target_url: Optional[str] = None
 
 
 class ExtensionHeartbeatRequest(BaseModel):

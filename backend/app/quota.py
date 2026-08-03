@@ -10,8 +10,9 @@ def project_storage_usage_bytes(project_db: Session) -> int:
     """Sums ALL evidence for the project — ACTIVE and ARCHIVED both still
     occupy real storage (requirement 9); only a future purge feature
     would actually free space."""
-    total = project_db.query(func.sum(models.EvidenceItem.original_size_bytes)).scalar()
-    return total or 0
+    evidence_total = project_db.query(func.sum(models.EvidenceItem.original_size_bytes)).scalar() or 0
+    screenshot_total = project_db.query(func.sum(models.WorkflowRunScreenshot.size_bytes)).scalar() or 0
+    return evidence_total + screenshot_total
 
 
 def quota_status(project: models.Project, project_db: Session) -> dict:

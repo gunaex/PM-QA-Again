@@ -26,7 +26,9 @@ export default function CycleList() {
   const load = () => {
     setLoading(true)
     setLoadError(null)
-    Promise.all([listCycles(slug), listSuites(slug)])
+    // Quick Manual Tests are real test history and must remain visible
+    // after the tester starts another quick case.
+    Promise.all([listCycles(slug, true), listSuites(slug)])
       .then(([c, s]) => {
         setCycles(c)
         setSuites(s)
@@ -176,6 +178,9 @@ export default function CycleList() {
               <div>
                 <div className="flex items-center gap-2">
                   <span className="font-medium text-gray-900">{c.name}</span>
+                  {c.is_system_generated && (
+                    <span className="px-1.5 py-0.5 text-[10px] rounded bg-emerald-50 text-emerald-700">Quick manual</span>
+                  )}
                   <StatusBadge status={c.status} />
                 </div>
                 <p className="text-xs text-gray-500 mt-0.5">{c.environment}</p>

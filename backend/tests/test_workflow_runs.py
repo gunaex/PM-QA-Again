@@ -2,6 +2,8 @@
 section) verified against the real running app (TestClient) using a
 runner token exactly as a real Node.js runner process would present it
 (X-Runner-Token header) -- not mocked."""
+import base64
+import json
 import time
 
 from fastapi.testclient import TestClient
@@ -50,6 +52,84 @@ def _issue_runner_token(auth_client, label):
     r = auth_client.post("/api/runner-tokens", json={"label": label})
     assert r.status_code == 200, r.text
     return r.json()["token"]
+
+
+def test_browser_extension_waits_for_target_then_reports_steps(auth_client, project_slug):
+    slug = project_slug
+    _workflow_id, revision_id, step_ids = _make_published_workflow(auth_client, slug, n_steps=1)
+
+    prepared = auth_client.post(
+        f"/api/{slug}/workflow-runs/browser-prepare",
+        json={"workflow_revision_id": revision_id},
+    )
+    assert prepared.status_code == 200, prepared.text
+    payload = prepared.json()
+    assert payload["run"]["status"] == "WAITING_FOR_TARGET"
+    pairing = json.loads(base64.b64decode(payload["pairing_code"]))
+    assert pairing["mode"] == "playback"
+    assert pairing["projectSlug"] == slug
+    assert pairing["runId"] == payload["run"]["id"]
+    assert pairing["token"]
+
+    run_id = pairing["runId"]
+    token_body = {"extension_token": pairing["token"]}
+    connected = auth_client.post(f"/api/{slug}/workflow-runs/{run_id}/browser-connect", json=token_body)
+    assert connected.status_code == 200, connected.text
+    assert connected.json()["run"]["status"] == "READY"
+    assert [s["id"] for s in connected.json()["steps"]] == step_ids
+
+    started = auth_client.post(f"/api/{slug}/workflow-runs/{run_id}/browser-start", json=token_body)
+    assert started.status_code == 200
+    assert started.json()["status"] == "RUNNING"
+
+    png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+    screenshot = auth_client.post(
+        f"/api/{slug}/workflow-runs/{run_id}/browser-screenshot",
+        json={**token_body, "workflow_step_id": step_ids[0], "data_url": f"data:image/png;base64,{png_b64}"},
+    )
+    assert screenshot.status_code == 200, screenshot.text
+    screenshot_id = screenshot.json()["id"]
+
+    step_result = auth_client.post(
+        f"/api/{slug}/workflow-runs/{run_id}/browser-step",
+        json={**token_body, "workflow_step_id": step_ids[0], "status": "PASSED", "attempt_number": 1, "duration_ms": 1247},
+    )
+    assert step_result.status_code == 200, step_result.text
+    assert step_result.json()["status"] == "PASSED"
+    assert step_result.json()["duration_ms"] == 1247
+
+    completed = auth_client.post(
+        f"/api/{slug}/workflow-runs/{run_id}/browser-complete",
+        json={**token_body, "status": "PASSED"},
+    )
+    assert completed.status_code == 200
+    assert completed.json()["status"] == "PASSED"
+    detail = auth_client.get(f"/api/{slug}/workflow-runs/{run_id}").json()
+    assert detail["screenshots"][0]["workflow_step_id"] == step_ids[0]
+    image = auth_client.get(f"/api/{slug}/workflow-runs/{run_id}/screenshots/{screenshot_id}")
+    assert image.status_code == 200
+    assert image.headers["content-type"] == "image/png"
+    assert auth_client.post(f"/api/{slug}/workflow-runs/{run_id}/browser-status", json=token_body).status_code == 401
+
+
+def test_browser_extension_prepared_run_can_cancel_before_attach(auth_client, project_slug):
+    slug = project_slug
+    _workflow_id, revision_id, _step_ids = _make_published_workflow(auth_client, slug, n_steps=1)
+    prepared = auth_client.post(
+        f"/api/{slug}/workflow-runs/browser-prepare",
+        json={"workflow_revision_id": revision_id},
+    ).json()
+    pairing = json.loads(base64.b64decode(prepared["pairing_code"]))
+    run_id = prepared["run"]["id"]
+
+    cancelled = auth_client.post(f"/api/{slug}/workflow-runs/{run_id}/cancel")
+    assert cancelled.status_code == 200
+    assert cancelled.json()["status"] == "CANCELLED"
+    rejected = auth_client.post(
+        f"/api/{slug}/workflow-runs/{run_id}/browser-connect",
+        json={"extension_token": pairing["token"]},
+    )
+    assert rejected.status_code == 401
 
 
 def test_dispatched_runner_claims_exact_run(auth_client, project_slug):

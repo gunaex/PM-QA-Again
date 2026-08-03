@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { listWorkflows, createWorkflow } from '../api/client'
+import { listWorkflows, createWorkflow, deleteWorkflow } from '../api/client'
 import { useAuth } from '../auth/AuthContext.jsx'
 
 export default function WorkflowList() {
@@ -13,6 +13,7 @@ export default function WorkflowList() {
   const [loadError, setLoadError] = useState(null)
   const [name, setName] = useState('')
   const [creating, setCreating] = useState(false)
+  const [deletingId, setDeletingId] = useState(null)
 
   const load = () => {
     setLoading(true)
@@ -34,6 +35,20 @@ export default function WorkflowList() {
       navigate(`/${slug}/workflows/${workflow.id}`)
     } finally {
       setCreating(false)
+    }
+  }
+
+  const handleDelete = async (workflow) => {
+    if (!window.confirm(`Delete "${workflow.name}" from Automated Tests? Existing run history is kept.`)) return
+    setDeletingId(workflow.id)
+    setLoadError(null)
+    try {
+      await deleteWorkflow(slug, workflow.id)
+      setWorkflows((current) => current.filter((item) => item.id !== workflow.id))
+    } catch (error) {
+      setLoadError(error.response?.data?.detail || 'Could not delete this automated test.')
+    } finally {
+      setDeletingId(null)
     }
   }
 
@@ -77,17 +92,27 @@ export default function WorkflowList() {
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
           {workflows.map((workflow) => (
-            <button
-              key={workflow.id}
-              onClick={() => navigate(`/${slug}/workflows/${workflow.id}`)}
-              className="text-left p-5 bg-white border border-gray-200 rounded-xl hover:shadow-md hover:border-emerald-300 transition"
-            >
-              <h3 className="font-medium text-gray-900">{workflow.name}</h3>
-              {workflow.description && <p className="text-xs text-gray-500 mt-1">{workflow.description}</p>}
-              <p className="text-xs text-gray-400 mt-3">
-                {workflow.published_revision_label ? 'Ready to run' : 'Ready to record'}
-              </p>
-            </button>
+            <div key={workflow.id} className="relative bg-white border border-gray-200 rounded-xl hover:shadow-md hover:border-emerald-300 transition">
+              <button
+                onClick={() => navigate(`/${slug}/workflows/${workflow.id}`)}
+                className="w-full h-full text-left p-5 pr-16 rounded-xl"
+              >
+                <h3 className="font-medium text-gray-900">{workflow.name}</h3>
+                {workflow.description && <p className="text-xs text-gray-500 mt-1">{workflow.description}</p>}
+                <p className="text-xs text-gray-400 mt-3">
+                  {workflow.published_revision_label ? 'Ready to run' : 'Ready to record'}
+                </p>
+              </button>
+              {canEdit && (
+                <button
+                  onClick={() => handleDelete(workflow)}
+                  disabled={deletingId === workflow.id}
+                  className="absolute top-3 right-3 px-2 py-1 text-xs text-red-600 border border-red-200 rounded hover:bg-red-50 disabled:opacity-50"
+                >
+                  {deletingId === workflow.id ? 'Deleting…' : 'Delete'}
+                </button>
+              )}
+            </div>
           ))}
         </div>
       )}

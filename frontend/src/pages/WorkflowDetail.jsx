@@ -18,9 +18,10 @@ import {
   listCases,
   listWorkflowRuns,
   queueWorkflowRun,
+  prepareBrowserWorkflowRun,
   getWorkflowRun,
+  workflowRunScreenshotUrl,
   cancelWorkflowRun,
-  previewWorkflowRun,
 } from '../api/client'
 import { useAuth } from '../auth/AuthContext.jsx'
 import StatusBadge from '../components/StatusBadge.jsx'
@@ -40,10 +41,28 @@ const LOCATOR_TYPES = new Set(['CLICK', 'FILL', 'SELECT', 'CHECK', 'UNCHECK', 'P
 // "run this 5 times" either does nothing useful or is actively
 // confusing (repeating a page-load, a pause, or an assertion).
 const REPEATABLE_TYPES = new Set(['CLICK', 'FILL', 'SELECT', 'CHECK', 'UNCHECK', 'PRESS_KEY', 'SCREENSHOT'])
+const ACTIVE_RUN_STATUSES = new Set(['WAITING_FOR_TARGET', 'READY', 'QUEUED', 'CLAIMED', 'STARTING', 'RUNNING', 'WAITING_FOR_HUMAN', 'RESUMING'])
+
+function formatPerformanceDuration(milliseconds) {
+  if (milliseconds == null) return null
+  return milliseconds < 1000 ? `${milliseconds} ms` : `${(milliseconds / 1000).toFixed(2)} s`
+}
+
+function PerformanceSummary({ stepRuns }) {
+  const durations = stepRuns.map((step) => step.duration_ms).filter((value) => value != null)
+  if (durations.length === 0) return null
+  const total = durations.reduce((sum, value) => sum + value, 0)
+  const slowest = Math.max(...durations)
+  return (
+    <p className="mb-2 text-xs text-gray-500">
+      Performance: {durations.length} actions · total {formatPerformanceDuration(total)} · average {formatPerformanceDuration(Math.round(total / durations.length))} · slowest {formatPerformanceDuration(slowest)}
+    </p>
+  )
+}
 
 const emptyStepForm = {
   step_type: 'CLICK', locator_strategy: 'ROLE', locator_value: '', input_value: '', expected_value: '',
-  is_sensitive: false, checkpoint_instructions: '', repeat_count: '',
+  is_sensitive: false, checkpoint_instructions: '', repeat_count: '', capture_screenshot: false,
 }
 
 // Raw runner/human event log -- useful for debugging a failure in
@@ -101,6 +120,8 @@ export default function WorkflowDetail() {
   const [repeatWholeTest, setRepeatWholeTest] = useState(1)
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [startingRun, setStartingRun] = useState(false)
+  const [preparedPairing, setPreparedPairing] = useState(null)
+  const [pairingCopied, setPairingCopied] = useState(false)
 
   const selectedRevision = revisions.find((r) => r.id === selectedRevisionId) || null
   const isDraft = selectedRevision?.status === 'DRAFT'
@@ -172,13 +193,14 @@ export default function WorkflowDetail() {
   }
 
   const handleRunTest = async () => {
-    if (!selectedRevisionId || startingRun) return
+    if (!selectedRevisionId || startingRun || ACTIVE_RUN_STATUSES.has(runs[0]?.status)) return
     setStartingRun(true)
     setError(null)
     try {
-      const run = isPublished
-        ? await queueWorkflowRun(slug, selectedRevisionId)
-        : await previewWorkflowRun(slug, selectedRevisionId)
+      const prepared = await prepareBrowserWorkflowRun(slug, selectedRevisionId)
+      const run = prepared.run
+      setPreparedPairing(prepared)
+      setPairingCopied(false)
       setRuns((prev) => [run, ...prev.filter((item) => item.id !== run.id)])
       setExpandedRunId(run.id)
     } catch (err) {
@@ -186,6 +208,12 @@ export default function WorkflowDetail() {
     } finally {
       setStartingRun(false)
     }
+  }
+
+  const copyPlaybackPairing = async () => {
+    if (!preparedPairing?.pairing_code) return
+    await navigator.clipboard.writeText(preparedPairing.pairing_code)
+    setPairingCopied(true)
   }
 
   const handleCancelRun = async (runId) => {
@@ -221,6 +249,8 @@ export default function WorkflowDetail() {
     setError(null)
     try {
       const payload = { ...stepForm }
+      payload.evidence_policy = payload.capture_screenshot ? 'REQUIRED' : 'NONE'
+      delete payload.capture_screenshot
       if (!LOCATOR_TYPES.has(payload.step_type)) {
         payload.locator_strategy = null
         payload.locator_value = null
@@ -336,13 +366,36 @@ export default function WorkflowDetail() {
             {canEdit && steps.length > 0 && (
               <button
                 onClick={handleRunTest}
-                disabled={startingRun}
+                disabled={startingRun || ACTIVE_RUN_STATUSES.has(runs[0]?.status)}
                 className="px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-md hover:bg-emerald-700 disabled:opacity-50"
               >
-                {startingRun ? 'Starting…' : '▶ Run Test'}
+                {startingRun ? 'Preparing…' : ACTIVE_RUN_STATUSES.has(runs[0]?.status) ? 'Test active' : '▶ Run Test'}
               </button>
             )}
           </div>
+          {preparedPairing && preparedPairing.run.id === runs[0]?.id && ACTIVE_RUN_STATUSES.has(runs[0]?.status) && (
+            <div className="mx-5 mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+              <p className="font-semibold text-emerald-900">Choose where this test should run</p>
+              <ol className="mt-2 space-y-1 text-sm text-emerald-800 list-decimal list-inside">
+                <li>Copy the test code below.</li>
+                <li>Switch to the target tab and open the QA-Again Extension.</li>
+                <li>Paste the code and choose <strong>Use This Tab</strong>.</li>
+                <li>Move the floating controller, then press <strong>Start</strong>.</li>
+              </ol>
+              <div className="mt-3 flex gap-2">
+                <input
+                  readOnly
+                  value={preparedPairing.pairing_code}
+                  aria-label="Browser test pairing code"
+                  className="min-w-0 flex-1 rounded-md border border-emerald-200 bg-white px-3 py-2 text-xs font-mono text-gray-500"
+                />
+                <button onClick={copyPlaybackPairing} className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white">
+                  {pairingCopied ? 'Copied' : 'Copy code'}
+                </button>
+              </div>
+              <p className="mt-2 text-xs text-emerald-700">Nothing will click or type until you press Start in the target tab.</p>
+            </div>
+          )}
           {steps.length === 0 ? (
             <div className="px-5 py-10 text-center">
               <p className="text-sm text-gray-500">No actions recorded yet.</p>
@@ -370,27 +423,74 @@ export default function WorkflowDetail() {
               <p className="text-xs font-medium text-gray-500 uppercase">Latest result</p>
               <div className="mt-2"><RunResultBanner status={runs[0].status} /></div>
             </div>
-            <button
-              onClick={() => setExpandedRunId((current) => current === runs[0].id ? null : runs[0].id)}
-              className="ml-auto text-sm text-emerald-700 hover:underline"
-            >
-              {expandedRunId === runs[0].id ? 'Hide details' : 'View details'}
-            </button>
+            <div className="ml-auto flex items-center gap-3">
+              {ACTIVE_RUN_STATUSES.has(runs[0].status) && (
+                <button onClick={() => handleCancelRun(runs[0].id)} className="text-sm text-red-600 hover:underline">
+                  Cancel
+                </button>
+              )}
+              <button
+                onClick={() => setExpandedRunId((current) => current === runs[0].id ? null : runs[0].id)}
+                className="text-sm text-emerald-700 hover:underline"
+              >
+                {expandedRunId === runs[0].id ? 'Hide details' : 'View details'}
+              </button>
+            </div>
           </div>
           {expandedRunId === runs[0].id && expandedRunDetail && (
             <div className="border-t border-gray-100 px-5 py-4">
               {(expandedRunDetail.step_runs || []).length === 0 ? (
-                <p className="text-sm text-gray-500">The test is waiting to begin.</p>
+                <p className="text-sm text-gray-500">
+                  {expandedRunDetail.status === 'WAITING_FOR_TARGET'
+                    ? 'Waiting for you to choose a target tab in the QA-Again Extension.'
+                    : expandedRunDetail.status === 'READY'
+                      ? 'Target selected. Press Start in the floating controller when you are ready.'
+                      : expandedRunDetail.status === 'QUEUED'
+                        ? 'Starting a browser. If this takes more than a few seconds, cancel and try again.'
+                        : 'The browser is starting the first action.'}
+                </p>
               ) : (
-                <ol className="space-y-2">
-                  {expandedRunDetail.step_runs.map((stepRun) => (
-                    <li key={stepRun.id} className="text-sm flex items-start gap-2">
-                      <span>{STEP_RUN_ICON[stepRun.status] || '○'}</span>
-                      <span className="text-gray-700">{describeStep(stepRun).text}</span>
-                      {stepRun.machine_message && <span className="ml-auto text-xs text-red-600">{stepRun.machine_message}</span>}
-                    </li>
-                  ))}
-                </ol>
+                <>
+                  <PerformanceSummary stepRuns={expandedRunDetail.step_runs} />
+                  <ol className="space-y-2">
+                    {expandedRunDetail.step_runs.map((stepRun) => (
+                      <li key={stepRun.id} className="text-sm flex items-start gap-2">
+                        <span>{STEP_RUN_ICON[stepRun.status] || '○'}</span>
+                        <span className="text-gray-700">{describeStep(stepRun).text}</span>
+                        {stepRun.duration_ms != null && <span className="ml-auto text-xs font-mono text-gray-500">{formatPerformanceDuration(stepRun.duration_ms)}</span>}
+                        {stepRun.machine_message && <span className="text-xs text-red-600">{stepRun.machine_message}</span>}
+                      </li>
+                    ))}
+                  </ol>
+                  {(expandedRunDetail.screenshots || []).length > 0 && (
+                    <div className="mt-4">
+                      <p className="mb-2 text-xs font-medium text-gray-500">Screenshots</p>
+                      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2">
+                        {expandedRunDetail.screenshots.map((screenshot) => {
+                          const stepRun = expandedRunDetail.step_runs.find((item) => item.workflow_step_id === screenshot.workflow_step_id)
+                          return (
+                            <a
+                              key={screenshot.id}
+                              href={workflowRunScreenshotUrl(slug, expandedRunDetail.id, screenshot.id)}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="block border border-gray-200 rounded-md overflow-hidden hover:border-emerald-400"
+                            >
+                              <img
+                                src={workflowRunScreenshotUrl(slug, expandedRunDetail.id, screenshot.id)}
+                                alt={`Screenshot after action ${stepRun?.sequence_no || ''}`}
+                                className="w-full h-28 object-cover object-top bg-gray-50"
+                              />
+                              <span className="block px-2 py-1 text-[10px] text-gray-500">
+                                Action {stepRun?.sequence_no || '—'} · {Math.round(screenshot.size_bytes / 1024)} KB
+                              </span>
+                            </a>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           )}
@@ -565,6 +665,16 @@ export default function WorkflowDetail() {
                         Sensitive (use a ${'{'}VAR{'}'} placeholder, never a real value)
                       </label>
                     )}
+                    {stepForm.step_type !== 'SCREENSHOT' && (
+                      <label className="flex items-center gap-1 text-xs text-gray-600">
+                        <input
+                          type="checkbox"
+                          checked={stepForm.capture_screenshot}
+                          onChange={(e) => setStepForm({ ...stepForm, capture_screenshot: e.target.checked })}
+                        />
+                        Screenshot after this step
+                      </label>
+                    )}
                   </div>
                   <button type="submit" className="px-3 py-1.5 text-xs bg-gray-800 text-white rounded-md hover:bg-gray-900">
                     + Add Step
@@ -713,17 +823,21 @@ export default function WorkflowDetail() {
                             {expandedRunDetail.step_runs.length === 0 ? (
                               <p className="text-xs text-gray-400">No steps executed yet.</p>
                             ) : (
-                              <ul className="space-y-0.5">
-                                {expandedRunDetail.step_runs.map((sr) => (
-                                  <li key={sr.id} className="text-xs flex items-center gap-2">
-                                    <span className="font-mono text-gray-400 w-5">{sr.sequence_no}</span>
-                                    <span>{STEP_RUN_ICON[sr.status] || '⚪'}</span>
-                                    <span title={sr.step_type}>{describeStep(sr).text}</span>
-                                    {sr.failure_category && <span className="text-red-600">{sr.failure_category}</span>}
-                                    {sr.machine_message && <span className="text-gray-500 truncate max-w-xs">{sr.machine_message}</span>}
-                                  </li>
-                                ))}
-                              </ul>
+                              <>
+                                <PerformanceSummary stepRuns={expandedRunDetail.step_runs} />
+                                <ul className="space-y-0.5">
+                                  {expandedRunDetail.step_runs.map((sr) => (
+                                    <li key={sr.id} className="text-xs flex items-center gap-2">
+                                      <span className="font-mono text-gray-400 w-5">{sr.sequence_no}</span>
+                                      <span>{STEP_RUN_ICON[sr.status] || '⚪'}</span>
+                                      <span title={sr.step_type}>{describeStep(sr).text}</span>
+                                      {sr.duration_ms != null && <span className="ml-auto font-mono text-gray-500">{formatPerformanceDuration(sr.duration_ms)}</span>}
+                                      {sr.failure_category && <span className="text-red-600">{sr.failure_category}</span>}
+                                      {sr.machine_message && <span className="text-gray-500 truncate max-w-xs">{sr.machine_message}</span>}
+                                    </li>
+                                  ))}
+                                </ul>
+                              </>
                             )}
                           </div>
                           <DeveloperDataEvents events={expandedRunDetail.events} />

@@ -323,7 +323,7 @@ export default function ReportsPage() {
   const [cycleBId, setCycleBId] = useState('')
 
   useEffect(() => {
-    listCycles(slug).then((c) => {
+    listCycles(slug, true).then((c) => {
       setCycles(c)
       if (c.length > 0) setCycleId(String(c[0].id))
     })
