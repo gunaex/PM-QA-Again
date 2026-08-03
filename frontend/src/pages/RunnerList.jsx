@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react'
 import { NavLink } from 'react-router-dom'
+import { Server, ChevronLeft, Plus, XCircle } from 'lucide-react'
+import { toast } from 'sonner'
 import { listRunnerTokens, createRunnerToken, revokeRunnerToken } from '../api/client'
 import UserBadge from '../components/UserBadge.jsx'
+import ConfirmDialog from '../components/ConfirmDialog.jsx'
 import { useAuth } from '../auth/AuthContext.jsx'
 
 const STATUS_COLOR = {
@@ -18,6 +21,7 @@ export default function RunnerList() {
   const [loading, setLoading] = useState(true)
   const [label, setLabel] = useState('')
   const [newToken, setNewToken] = useState(null)
+  const [confirmRevoke, setConfirmRevoke] = useState(null) // { id } or null
 
   const load = () => {
     setLoading(true)
@@ -35,16 +39,27 @@ export default function RunnerList() {
   const handleCreate = async (e) => {
     e.preventDefault()
     if (!label.trim()) return
-    const result = await createRunnerToken(label.trim())
-    setNewToken(result)
-    setLabel('')
-    load()
+    try {
+      const result = await createRunnerToken(label.trim())
+      setNewToken(result)
+      setLabel('')
+      toast.success('Runner token created')
+      load()
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to create runner token')
+    }
   }
 
-  const handleRevoke = async (id) => {
-    if (!window.confirm('Revoke this runner token? The runner process will be rejected on its next call.')) return
-    await revokeRunnerToken(id)
-    load()
+  const handleRevoke = async () => {
+    if (!confirmRevoke) return
+    try {
+      await revokeRunnerToken(confirmRevoke.id)
+      toast.success('Runner token revoked')
+      setConfirmRevoke(null)
+      load()
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to revoke token')
+    }
   }
 
   if (!isAdmin) {
@@ -60,10 +75,14 @@ export default function RunnerList() {
       <div className="max-w-4xl mx-auto px-4 sm:px-6 py-10">
         <div className="flex items-center justify-between mb-6 gap-4">
           <div>
-            <NavLink to="/" className="text-sm text-gray-500 hover:text-gray-800">
-              &larr; Projects
+            <NavLink to="/" className="text-sm text-gray-500 hover:text-gray-800 flex items-center gap-1 transition">
+              <ChevronLeft size={14} />
+              Projects
             </NavLink>
-            <h1 className="text-2xl font-semibold text-gray-900 mt-1">Runners</h1>
+            <div className="flex items-center gap-2 mt-1">
+              <Server size={20} className="text-emerald-600" />
+              <h1 className="text-2xl font-semibold text-gray-900">Runners</h1>
+            </div>
           </div>
           <UserBadge />
         </div>
@@ -111,7 +130,8 @@ export default function RunnerList() {
                   </p>
                 </div>
                 {!r.revoked && (
-                  <button onClick={() => handleRevoke(r.id)} className="text-xs text-red-600 hover:underline shrink-0">
+                  <button onClick={() => setConfirmRevoke(r)} className="text-xs text-red-600 hover:underline shrink-0 flex items-center gap-1">
+                    <XCircle size={12} />
                     Revoke
                   </button>
                 )}
@@ -119,6 +139,16 @@ export default function RunnerList() {
             ))}
           </div>
         )}
+
+        <ConfirmDialog
+          open={!!confirmRevoke}
+          onClose={() => setConfirmRevoke(null)}
+          onConfirm={handleRevoke}
+          title={`Revoke "${confirmRevoke?.label}" token?`}
+          message="The runner process will be rejected on its next call."
+          confirmLabel="Revoke"
+          danger
+        />
       </div>
     </div>
   )

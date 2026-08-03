@@ -1,8 +1,12 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, NavLink } from 'react-router-dom'
+import { FolderKanban, Plus, Archive, Trash2, FolderOpen, Users, Server } from 'lucide-react'
+import { toast } from 'sonner'
 import { listProjects, createProject, archiveProject, deleteProject } from '../api/client'
 import UserBadge from '../components/UserBadge.jsx'
 import PasswordConfirmModal from '../components/PasswordConfirmModal.jsx'
+import EmptyState from '../components/EmptyState.jsx'
+import { CardSkeleton } from '../components/PageSkeleton.jsx'
 import { useAuth } from '../auth/AuthContext.jsx'
 
 export default function ProjectList() {
@@ -34,13 +38,19 @@ export default function ProjectList() {
 
   const runConfirmedAction = async (password) => {
     const { type, slug } = confirmAction
-    if (type === 'delete') {
-      await deleteProject(slug, password)
-    } else {
-      await archiveProject(slug, type === 'archive', password)
+    try {
+      if (type === 'delete') {
+        await deleteProject(slug, password)
+        toast.success('Project deleted')
+      } else {
+        await archiveProject(slug, type === 'archive', password)
+        toast.success(type === 'archive' ? 'Project archived' : 'Project unarchived')
+      }
+      setConfirmAction(null)
+      load()
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Action failed. Check your password.')
     }
-    setConfirmAction(null)
-    load()
   }
 
   const handleCreate = async (e) => {
@@ -52,7 +62,10 @@ export default function ProjectList() {
       setName('')
       setExternalUrl('')
       setProjects((prev) => [project, ...prev])
+      toast.success(`Project "${project.name}" created`)
       navigate(`/${project.slug}/dashboard`)
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to create project')
     } finally {
       setCreating(false)
     }
@@ -62,7 +75,10 @@ export default function ProjectList() {
     <div className="min-h-screen bg-gray-50">
       <div className="max-w-5xl mx-auto px-4 sm:px-6 py-10">
         <div className="flex items-center justify-between mb-6 gap-4">
-          <h1 className="text-2xl font-semibold text-gray-900">Projects</h1>
+          <div className="flex items-center gap-3">
+            <FolderKanban size={24} className="text-emerald-600" />
+            <h1 className="text-2xl font-semibold text-gray-900">Projects</h1>
+          </div>
           <div className="flex items-center gap-4">
             {isAdmin && (
               <label className="flex items-center gap-1.5 text-sm text-gray-600">
@@ -71,12 +87,14 @@ export default function ProjectList() {
               </label>
             )}
             {isAdmin && (
-              <NavLink to="/users" className="text-sm text-gray-500 hover:text-gray-800">
+              <NavLink to="/users" className="text-sm text-gray-500 hover:text-gray-800 flex items-center gap-1 transition">
+                <Users size={14} />
                 Users
               </NavLink>
             )}
             {isAdmin && (
-              <NavLink to="/runners" className="text-sm text-gray-500 hover:text-gray-800">
+              <NavLink to="/runners" className="text-sm text-gray-500 hover:text-gray-800 flex items-center gap-1 transition">
+                <Server size={14} />
                 Runners
               </NavLink>
             )}
@@ -86,12 +104,15 @@ export default function ProjectList() {
 
         {canCreate && (
           <form onSubmit={handleCreate} className="flex flex-col sm:flex-row gap-2 mb-8">
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="New QA project name"
-              className="flex-1 px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-            />
+            <div className="relative flex-1">
+              <FolderOpen size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="New QA project name"
+                className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+            </div>
             <input
               value={externalUrl}
               onChange={(e) => setExternalUrl(e.target.value)}
@@ -101,15 +122,16 @@ export default function ProjectList() {
             <button
               type="submit"
               disabled={creating}
-              className="px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-md hover:bg-emerald-700 disabled:opacity-50"
+              className="px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-md hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-1.5"
             >
+              <Plus size={16} />
               {creating ? 'Creating…' : 'New Project'}
             </button>
           </form>
         )}
 
         {loading ? (
-          <p className="text-gray-500 text-sm">Loading…</p>
+          <CardSkeleton count={6} />
         ) : loadError ? (
           <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-md px-4 py-3">
             <p>{loadError}</p>
@@ -118,11 +140,15 @@ export default function ProjectList() {
             </button>
           </div>
         ) : projects.length === 0 ? (
-          <p className="text-gray-500 text-sm">
-            {canCreate
-              ? 'No projects yet. Create one above.'
-              : "No projects assigned to your account yet — ask an admin to grant you access."}
-          </p>
+          <EmptyState
+            icon={FolderKanban}
+            title={canCreate ? 'No projects yet' : 'No projects assigned'}
+            description={
+              canCreate
+                ? 'Create your first QA project to start managing test suites and cycles.'
+                : "No projects assigned to your account yet — ask an admin to grant you access."
+            }
+          />
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {projects.map((p) => (
@@ -150,8 +176,9 @@ export default function ProjectList() {
                         e.stopPropagation()
                         setConfirmAction({ type: p.archived ? 'unarchive' : 'archive', slug: p.slug, name: p.name })
                       }}
-                      className="text-xs text-gray-500 hover:underline"
+                      className="text-xs text-gray-500 hover:underline flex items-center gap-1 cursor-pointer"
                     >
+                      <Archive size={12} />
                       {p.archived ? 'Unarchive' : 'Archive'}
                     </span>
                     <span
@@ -159,8 +186,9 @@ export default function ProjectList() {
                         e.stopPropagation()
                         setConfirmAction({ type: 'delete', slug: p.slug, name: p.name })
                       }}
-                      className="text-xs text-red-500 hover:underline"
+                      className="text-xs text-red-500 hover:underline flex items-center gap-1 cursor-pointer"
                     >
+                      <Trash2 size={12} />
                       Delete
                     </span>
                   </div>

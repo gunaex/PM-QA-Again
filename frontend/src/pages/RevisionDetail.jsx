@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { NavLink, useNavigate, useParams } from 'react-router-dom'
+import { toast } from 'sonner'
 import {
   getRevision,
   listCases,
@@ -13,6 +14,7 @@ import {
   importCasesExcel,
   importCasesCsv,
 } from '../api/client'
+import ConfirmDialog from '../components/ConfirmDialog.jsx'
 import { useAuth } from '../auth/AuthContext.jsx'
 import StatusBadge from '../components/StatusBadge.jsx'
 
@@ -65,6 +67,7 @@ export default function RevisionDetail() {
   const [showForm, setShowForm] = useState(false)
   const [saving, setSaving] = useState(false)
   const [importMsg, setImportMsg] = useState(null)
+  const [confirmPublish, setConfirmPublish] = useState(false)
 
   const isDraft = revision?.status === 'DRAFT'
 
@@ -128,14 +131,16 @@ export default function RevisionDetail() {
   const handleDelete = async (caseId) => {
     await deleteCase(slug, revisionId, caseId)
     setCases((prev) => prev.filter((c) => c.id !== caseId))
+    toast.success('Test case deleted')
   }
 
   const handlePublish = async () => {
-    if (!window.confirm('Publish this revision? Published content becomes immutable — corrections require cloning a new draft.')) return
     setError(null)
+    setConfirmPublish(false)
     try {
       const updated = await publishRevision(slug, suiteId, revisionId)
       setRevision(updated)
+      toast.success('Revision published')
     } catch (err) {
       setError(err.response?.data?.detail || 'Could not publish this revision')
     }
@@ -233,7 +238,7 @@ export default function RevisionDetail() {
         )}
         {isDraft && isAdmin && (
           <button
-            onClick={handlePublish}
+            onClick={() => setConfirmPublish(true)}
             disabled={cases.length === 0}
             className="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-md hover:bg-emerald-700 disabled:opacity-50"
           >
@@ -395,6 +400,15 @@ export default function RevisionDetail() {
           </table>
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmPublish}
+        onClose={() => setConfirmPublish(false)}
+        onConfirm={handlePublish}
+        title="Publish this revision?"
+        message="Published content becomes immutable — corrections require cloning a new draft."
+        confirmLabel="Publish"
+      />
     </div>
   )
 }

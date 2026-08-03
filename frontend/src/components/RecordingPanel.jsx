@@ -19,8 +19,10 @@ import {
   previewWorkflowRun,
   getWorkflowRun,
 } from '../api/client'
+import { toast } from 'sonner'
 import StatusBadge from './StatusBadge.jsx'
 import RunResultBanner from './RunResultBanner.jsx'
+import ConfirmDialog from './ConfirmDialog.jsx'
 import { describeStep, STEP_RUN_ICON } from '../utils/describeStep.js'
 
 const RUN_TERMINAL_STATUSES = new Set([
@@ -62,6 +64,7 @@ export default function RecordingPanel({ slug, workflowId, canEdit, nextRevision
   const [extensionToken, setExtensionToken] = useState(null)
   const [pairingCopied, setPairingCopied] = useState(false)
   const [savedRevision, setSavedRevision] = useState(null)
+  const [confirmDiscard, setConfirmDiscard] = useState(false)
   const [showActionTools, setShowActionTools] = useState(false)
   const [previewRun, setPreviewRun] = useState(null)
   const [previewError, setPreviewError] = useState(null)
@@ -153,10 +156,11 @@ export default function RecordingPanel({ slug, workflowId, canEdit, nextRevision
     }
   }
   const handleDiscard = async () => {
-    if (!window.confirm('Discard this recording? All captured steps will be deleted.')) return
+    setConfirmDiscard(false)
     await discardRecordingSession(slug, session.id)
     setSession(null)
     setExtensionToken(null)
+    toast.success('Recording discarded')
   }
 
   const handleInsertCheckpoint = async (e) => {
@@ -323,7 +327,7 @@ export default function RecordingPanel({ slug, workflowId, canEdit, nextRevision
             </button>
           )}
           {session.status !== 'SAVED' && (
-            <button onClick={handleDiscard} className="px-2 py-1 text-xs text-red-600 border border-red-200 rounded hover:bg-red-50">
+            <button onClick={() => setConfirmDiscard(true)} className="px-2 py-1 text-xs text-red-600 border border-red-200 rounded hover:bg-red-50">
               Discard
             </button>
           )}
@@ -508,6 +512,16 @@ export default function RecordingPanel({ slug, workflowId, canEdit, nextRevision
       )}
 
       {error && <p className="text-xs text-red-600">{error}</p>}
+
+      <ConfirmDialog
+        open={confirmDiscard}
+        onClose={() => setConfirmDiscard(false)}
+        onConfirm={handleDiscard}
+        title="Discard this recording?"
+        message="All captured steps will be deleted."
+        confirmLabel="Discard"
+        danger
+      />
     </div>
   )
 }

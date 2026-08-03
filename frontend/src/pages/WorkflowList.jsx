@@ -1,7 +1,12 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
+import { Bot, Plus, Trash2 } from 'lucide-react'
+import { toast } from 'sonner'
 import { listWorkflows, createWorkflow, deleteWorkflow } from '../api/client'
 import { useAuth } from '../auth/AuthContext.jsx'
+import ConfirmDialog from '../components/ConfirmDialog.jsx'
+import EmptyState from '../components/EmptyState.jsx'
+import { CardSkeleton } from '../components/PageSkeleton.jsx'
 
 export default function WorkflowList() {
   const { slug } = useParams()
@@ -14,6 +19,7 @@ export default function WorkflowList() {
   const [name, setName] = useState('')
   const [creating, setCreating] = useState(false)
   const [deletingId, setDeletingId] = useState(null)
+  const [confirmDelete, setConfirmDelete] = useState(null) // { workflow } or null
 
   const load = () => {
     setLoading(true)
@@ -32,21 +38,27 @@ export default function WorkflowList() {
     setCreating(true)
     try {
       const workflow = await createWorkflow(slug, { name: name.trim() })
+      toast.success(`Automated test "${workflow.name}" created`)
       navigate(`/${slug}/workflows/${workflow.id}`)
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to create automated test')
     } finally {
       setCreating(false)
     }
   }
 
-  const handleDelete = async (workflow) => {
-    if (!window.confirm(`Delete "${workflow.name}" from Automated Tests? Existing run history is kept.`)) return
+  const handleDelete = async () => {
+    const workflow = confirmDelete
+    if (!workflow) return
     setDeletingId(workflow.id)
     setLoadError(null)
     try {
       await deleteWorkflow(slug, workflow.id)
       setWorkflows((current) => current.filter((item) => item.id !== workflow.id))
+      toast.success(`"${workflow.name}" deleted`)
+      setConfirmDelete(null)
     } catch (error) {
-      setLoadError(error.response?.data?.detail || 'Could not delete this automated test.')
+      toast.error(error.response?.data?.detail || 'Could not delete this automated test.')
     } finally {
       setDeletingId(null)
     }
@@ -55,8 +67,11 @@ export default function WorkflowList() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-xl font-semibold text-gray-900">Automated Tests</h2>
-        <p className="text-sm text-gray-500 mt-1">Record a browser journey, then replay it whenever you need confidence.</p>
+        <div className="flex items-center gap-3">
+          <Bot size={22} className="text-emerald-600" />
+          <h2 className="text-xl font-semibold text-gray-900">Automated Tests</h2>
+        </div>
+        <p className="text-sm text-gray-500 mt-1 ml-9">Record a browser journey, then replay it whenever you need confidence.</p>
       </div>
 
       {canEdit && (
@@ -70,25 +85,27 @@ export default function WorkflowList() {
           <button
             type="submit"
             disabled={creating || !name.trim()}
-            className="px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-md hover:bg-emerald-700 disabled:opacity-50"
+            className="px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-md hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-1.5"
           >
+            <Plus size={16} />
             {creating ? 'Creating…' : 'New Automated Test'}
           </button>
         </form>
       )}
 
       {loading ? (
-        <p className="text-gray-500 text-sm">Loading…</p>
+        <CardSkeleton count={3} />
       ) : loadError ? (
         <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-md px-4 py-3">
           <p>{loadError}</p>
           <button onClick={load} className="mt-2 text-red-800 font-medium hover:underline">Retry</button>
         </div>
       ) : workflows.length === 0 ? (
-        <div className="text-center bg-white border border-dashed border-gray-300 rounded-xl px-6 py-12">
-          <p className="font-medium text-gray-800">No automated tests yet</p>
-          <p className="text-gray-500 text-sm mt-1">Give your first test a name, then record the journey in your browser.</p>
-        </div>
+        <EmptyState
+          icon={Bot}
+          title="No automated tests yet"
+          description="Give your first test a name, then record the browser journey."
+        />
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
           {workflows.map((workflow) => (
@@ -105,17 +122,29 @@ export default function WorkflowList() {
               </button>
               {canEdit && (
                 <button
-                  onClick={() => handleDelete(workflow)}
+                  onClick={() => setConfirmDelete(workflow)}
                   disabled={deletingId === workflow.id}
-                  className="absolute top-3 right-3 px-2 py-1 text-xs text-red-600 border border-red-200 rounded hover:bg-red-50 disabled:opacity-50"
+                  className="absolute top-3 right-3 p-1.5 text-red-500 hover:bg-red-50 rounded-md transition"
+                  title="Delete"
                 >
-                  {deletingId === workflow.id ? 'Deleting…' : 'Delete'}
+                  <Trash2 size={16} />
                 </button>
               )}
             </div>
           ))}
         </div>
       )}
+
+      <ConfirmDialog
+        open={!!confirmDelete}
+        onClose={() => setConfirmDelete(null)}
+        onConfirm={handleDelete}
+        title={`Delete "${confirmDelete?.name}"?`}
+        message="Existing run history is kept, but this automated test will be removed."
+        confirmLabel="Delete"
+        danger
+        loading={!!deletingId}
+      />
     </div>
   )
 }

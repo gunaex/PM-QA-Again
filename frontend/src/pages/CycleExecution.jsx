@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { NavLink, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { toast } from 'sonner'
 import {
   getCycle,
   listCycleResults,
@@ -13,6 +14,7 @@ import {
 } from '../api/client'
 import { useAuth } from '../auth/AuthContext.jsx'
 import StatusBadge from '../components/StatusBadge.jsx'
+import ConfirmDialog from '../components/ConfirmDialog.jsx'
 import EvidenceGallery from '../components/EvidenceGallery.jsx'
 
 const STATUS_FILTERS = ['ALL', 'NOT_RUN', 'PASS', 'FAIL', 'BLOCKED', 'NOT_APPLICABLE']
@@ -42,6 +44,7 @@ export default function CycleExecution() {
   const [history, setHistory] = useState(null)
   const [showHistory, setShowHistory] = useState(false)
   const [showCompletion, setShowCompletion] = useState(false)
+  const [confirmDialog, setConfirmDialog] = useState(null) // { title, message, onConfirm, danger? } or null
 
   // Full result detail (adds case_action_md/expected/setup/validation),
   // fetched lazily per selection and cached for the rest of this page
@@ -192,10 +195,17 @@ export default function CycleExecution() {
     setShowHistory((v) => !v)
   }
 
-  const handleLock = async () => {
-    if (!window.confirm('Lock this cycle? All results become read-only until an admin reopens it.')) return
-    const updated = await lockCycle(slug, cycleId)
-    setCycle(updated)
+  const handleLock = () => {
+    setConfirmDialog({
+      title: 'Lock this cycle?',
+      message: 'All results become read-only until an admin reopens it.',
+      onConfirm: async () => {
+        const updated = await lockCycle(slug, cycleId)
+        setCycle(updated)
+        toast.success('Cycle locked')
+        setConfirmDialog(null)
+      },
+    })
   }
 
   const handleReopen = async () => {
@@ -203,17 +213,29 @@ export default function CycleExecution() {
     if (!reason) return
     const updated = await reopenCycle(slug, cycleId, reason)
     setCycle(updated)
+    toast.success('Cycle reopened')
   }
 
-  const handleRerun = async (mode) => {
+  const handleRerun = (mode) => {
     const label = mode === 'all' ? 'the entire cycle' : 'FAIL/BLOCKED cases only'
-    if (!window.confirm(`Rerun ${label}? This creates a brand-new cycle — this cycle is never changed.`)) return
-    try {
-      const newCycle = await rerunCycle(slug, cycleId, mode)
-      navigate(`/${slug}/cycles/${newCycle.id}`)
-    } catch (err) {
-      setError(err.response?.data?.detail || 'Could not rerun this cycle')
-    }
+    setConfirmDialog({
+      title: `Rerun ${label}?`,
+      message: 'This creates a brand-new cycle — this cycle is never changed.',
+      confirmLabel: 'Rerun',
+      onConfirm: async () => {
+        setRerunning(true)
+        setConfirmDialog(null)
+        try {
+          const newCycle = await rerunCycle(slug, cycleId, mode)
+          toast.success('New cycle created')
+          navigate(`/${slug}/cycles/${newCycle.id}`)
+        } catch (err) {
+          setError(err.response?.data?.detail || 'Could not rerun this cycle')
+        } finally {
+          setRerunning(false)
+        }
+      },
+    })
   }
 
   // Keyboard shortcuts (Alt+key, so ordinary typing in the Actual
@@ -516,6 +538,16 @@ export default function CycleExecution() {
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        open={!!confirmDialog}
+        onClose={() => setConfirmDialog(null)}
+        onConfirm={confirmDialog?.onConfirm}
+        title={confirmDialog?.title || ''}
+        message={confirmDialog?.message || ''}
+        confirmLabel={confirmDialog?.confirmLabel || 'Confirm'}
+        danger={confirmDialog?.danger}
+      />
     </div>
   )
 }

@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
+import { PlayCircle, Plus } from 'lucide-react'
+import { toast } from 'sonner'
 import { listCycles, createCycle, listSuites, listRevisions } from '../api/client'
 import { useAuth } from '../auth/AuthContext.jsx'
 import StatusBadge from '../components/StatusBadge.jsx'
+import EmptyState from '../components/EmptyState.jsx'
 
 const ENVIRONMENTS = ['NON-PROD', 'PROD', 'UAT', 'STR', 'Other']
 
@@ -62,6 +65,7 @@ export default function CycleList() {
         environment: form.environment.trim(),
         target_base_url: form.target_base_url.trim() || null,
       })
+      toast.success(`Cycle "${form.name.trim()}" created`)
       navigate(`/${slug}/cycles/${cycle.id}`)
     } catch (err) {
       setLoadError(err.response?.data?.detail || 'Could not create cycle')
@@ -72,7 +76,10 @@ export default function CycleList() {
 
   return (
     <div className="space-y-6">
-      <h2 className="text-xl font-semibold text-gray-900">Test Cycles</h2>
+      <div className="flex items-center gap-3">
+        <PlayCircle size={22} className="text-emerald-600" />
+        <h2 className="text-xl font-semibold text-gray-900">Test Cycles</h2>
+      </div>
 
       {canEdit && (
         <form onSubmit={handleCreate} className="bg-white border border-gray-200 rounded-lg p-5 space-y-3">
@@ -155,8 +162,9 @@ export default function CycleList() {
           <button
             type="submit"
             disabled={creating}
-            className="px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-md hover:bg-emerald-700 disabled:opacity-50"
+            className="px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-md hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-1.5"
           >
+            <Plus size={16} />
             {creating ? 'Creating…' : 'New Cycle'}
           </button>
         </form>
@@ -164,9 +172,17 @@ export default function CycleList() {
       {loadError && <p className="text-xs text-red-600">{loadError}</p>}
 
       {loading ? (
-        <p className="text-gray-500 text-sm">Loading…</p>
+        <div className="animate-pulse space-y-3">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="h-14 bg-gray-200 rounded-lg" />
+          ))}
+        </div>
       ) : cycles.length === 0 ? (
-        <p className="text-gray-500 text-sm">No test cycles yet.</p>
+        <EmptyState
+          icon={PlayCircle}
+          title="No test cycles yet"
+          description="Create a test cycle from a published revision to start executing test cases."
+        />
       ) : (
         <div className="bg-white border border-gray-200 rounded-lg divide-y divide-gray-100">
           {cycles.map((c) => (

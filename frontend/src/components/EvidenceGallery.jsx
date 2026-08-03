@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
+import { toast } from 'sonner'
 import { listEvidence, uploadEvidence, evidenceOriginalUrl, archiveEvidence } from '../api/client'
 import AnnotationEditor from './AnnotationEditor.jsx'
+import ConfirmDialog from './ConfirmDialog.jsx'
 
 /** Evidence-first execution requirement (rebuild prompt §13): three
  * capture paths — screen capture, clipboard paste, file upload — all
@@ -15,6 +17,7 @@ export default function EvidenceGallery({ slug, cycleId, resultId, canEdit, isAd
   // screen-capture/paste — no API call, no evidence row, no storage object
   // exists until the tester explicitly confirms. See docs/RELEASE_CLOSURE.md.
   const [pendingCapture, setPendingCapture] = useState(null)
+  const [confirmArchive, setConfirmArchive] = useState(null) // { id } or null
   const fileInputRef = useRef(null)
   const pasteZoneRef = useRef(null)
 
@@ -110,10 +113,16 @@ export default function EvidenceGallery({ slug, cycleId, resultId, canEdit, isAd
     setPendingCapture(null)
   }
 
-  const handleArchive = async (evidenceId) => {
-    if (!window.confirm('Archive this evidence? The original file is kept, just hidden from the default view.')) return
-    await archiveEvidence(slug, cycleId, resultId, evidenceId)
-    load()
+  const handleArchive = async () => {
+    if (!confirmArchive) return
+    try {
+      await archiveEvidence(slug, cycleId, resultId, confirmArchive.id)
+      toast.success('Evidence archived')
+      setConfirmArchive(null)
+      load()
+    } catch {
+      toast.error('Could not archive evidence')
+    }
   }
 
   return (
@@ -207,7 +216,7 @@ export default function EvidenceGallery({ slug, cycleId, resultId, canEdit, isAd
               )}
               {isAdmin && !isLocked && (
                 <button
-                  onClick={() => handleArchive(item.id)}
+                  onClick={() => setConfirmArchive(item)}
                   className="absolute bottom-1 right-1 bg-white/90 text-red-600 text-[9px] px-1 rounded opacity-0 group-hover:opacity-100"
                 >
                   Archive
@@ -231,6 +240,15 @@ export default function EvidenceGallery({ slug, cycleId, resultId, canEdit, isAd
           }}
         />
       )}
+
+      <ConfirmDialog
+        open={!!confirmArchive}
+        onClose={() => setConfirmArchive(null)}
+        onConfirm={handleArchive}
+        title="Archive this evidence?"
+        message="The original file is kept, just hidden from the default view."
+        confirmLabel="Archive"
+      />
     </div>
   )
 }
