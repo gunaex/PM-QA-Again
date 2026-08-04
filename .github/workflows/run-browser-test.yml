@@ -1,0 +1,84 @@
+name: Run browser test
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_slug:
+        description: QA-Again project slug
+        required: true
+        type: string
+      workflow_run_id:
+        description: Exact QA-Again workflow run ID
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qa-again-${{ inputs.project_slug }}-${{ inputs.workflow_run_id }}
+  cancel-in-progress: false
+
+jobs:
+  execute:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: runner
+    env:
+      BACKEND_BASE_URL: ${{ secrets.QA_AGAIN_BACKEND_BASE_URL }}
+      PROJECT_SLUG: ${{ inputs.project_slug }}
+      WORKFLOW_RUN_ID: ${{ inputs.workflow_run_id }}
+      RUNNER_TOKEN: ${{ secrets.QA_AGAIN_RUNNER_TOKEN }}
+      TARGET_BASE_URL: ${{ secrets.QA_AGAIN_TARGET_BASE_URL }}
+      RUNNER_HEADLESS: "1"
+      QA_AGAIN_MAX_CONCURRENT_BROWSERS: "1"
+    steps:
+      - name: Check out QA-Again
+        id: checkout
+        continue-on-error: true
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        id: node
+        continue-on-error: true
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: runner/package-lock.json
+
+      - name: Install runner dependencies
+        id: dependencies
+        continue-on-error: true
+        run: npm ci
+
+      - name: Install Chromium
+        id: browser
+        continue-on-error: true
+        run: npx playwright install --with-deps chromium
+
+      - name: Execute assigned browser test
+        id: test
+        continue-on-error: true
+        run: npm run execute
+
+      - name: Report cloud job failure
+        if: >-
+          ${{ always() && (
+            steps.checkout.outcome == 'failure' ||
+            steps.node.outcome == 'failure' ||
+            steps.dependencies.outcome == 'failure' ||
+            steps.browser.outcome == 'failure' ||
+            steps.test.outcome == 'failure'
+          ) }}
+        continue-on-error: true
+        working-directory: .
+        env:
+          FAILURE_URL: ${{ secrets.QA_AGAIN_BACKEND_BASE_URL }}/api/${{ inputs.project_slug }}/workflow-runs/${{ inputs.workflow_run_id }}/dispatch-failed
+        run: |
+          curl --fail-with-body --request POST "$FAILURE_URL" \
+            --header "X-Runner-Token: $RUNNER_TOKEN" \
+            --header "Content-Type: application/json" \
+            --data '{"message":"The GitHub Actions browser job failed during setup or execution."}'

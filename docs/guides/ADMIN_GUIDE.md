@@ -5,23 +5,47 @@ Read `docs/guides/TESTER_GUIDE.md` first for the core execution workflow.
 
 ## User management
 
-No UI yet for this — use the API directly (a future phase may add a UI
-screen):
+**Users** page (top nav, ADMIN-only, next to **Runners**) — no terminal
+needed:
+
+1. Fill in email, a temporary password, and a role (`ADMIN`, `TESTER`,
+   `VIEWER` — still a single global column per ADR-0001, not
+   per-project), click **Create User**. New accounts are forced to
+   change their password on first login.
+2. For a TESTER/VIEWER row, click **Manage projects** to see every
+   project as a toggle button — click a project to grant or revoke that
+   account's access to it. **A new TESTER/VIEWER starts with zero
+   project access until you assign one** (ADR-0003) — nothing is
+   auto-granted.
+3. **Deactivate**/**Reactivate** on a row blocks/restores that
+   account's ability to log in at all, without deleting it.
+
+ADMIN accounts always see and can act on every project — they never
+need (or show) a project-membership list.
+
+Still API-only, no UI yet: revoking a user outright (deactivate is the
+closest equivalent today) beyond the active toggle above.
 
 ```bash
+# Equivalent API calls, if you need them directly:
 curl -b cookies.txt -X POST https://api.qaagain.<domain>/api/auth/users \
   -H "Content-Type: application/json" \
   -d '{"email":"new.tester@company.com","password":"TempPass123!","role":"TESTER"}'
+curl -b cookies.txt -X POST https://api.qaagain.<domain>/api/auth/users/<user_id>/projects \
+  -H "Content-Type: application/json" -d '{"project_id": <project_id>}'
 ```
 
-Roles: `ADMIN`, `TESTER`, `VIEWER` — global per user, not per-project
-(ADR-0001). New accounts are forced to change their password on first
-login. List existing users: `GET /api/auth/users`.
+List existing users: `GET /api/auth/users`. List/grant/revoke a user's
+project access: `GET|POST /api/auth/users/{id}/projects`,
+`DELETE /api/auth/users/{id}/projects/{project_id}`.
 
 ## Project lifecycle
 
 - **Create**: Projects page → **New Project** (name + optional linked
-  PM-Again URL).
+  PM-Again URL) — **ADMIN-only** (ADR-0003). After creating it, go to
+  **Users** to grant whichever TESTER/VIEWER accounts need access —
+  nothing is auto-granted, not even to the admin who created it (ADMIN
+  already reaches every project unconditionally).
 - **Archive/Unarchive**: on a project card → requires re-entering your
   own password (a deliberate extra confirmation for a consequential,
   hard-to-reverse-feeling action, even though archive itself is
@@ -93,8 +117,9 @@ Sign-off Summary and the Excel export's `06_Sign_Off` sheet).
 
 ## What's not built yet (be aware, not surprised)
 
-- No UI for user management, defect creation/editing, or sign-off
-  recording — API-only for now.
+- No UI for defect creation/editing or sign-off recording — API-only
+  for now (user management and project-access assignment now have a UI
+  — see "User management" above).
 - Deleting a project does not cascade-delete its R2 evidence objects —
   they become orphans, caught by the next reconciliation run
   (`scripts/reconcile_evidence.py`), not deleted immediately. If you

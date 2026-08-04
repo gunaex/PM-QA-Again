@@ -34,7 +34,7 @@ failure-handling model. Filesystem storage remains the zero-config local
 development default; R2 is what production actually uses. Every other
 decision in this ADR (roles, export) is unaffected.
 
-### 2. Roles: global role per user, not per-project membership
+### 2. Roles: global role per user, not per-project membership — narrowly superseded by ADR-0003
 
 `users.role` is a single column (`ADMIN` | `TESTER` | `VIEWER`), exactly
 PM-Again's model — no per-project role table. This deviates from the
@@ -43,6 +43,14 @@ PM-Again's pattern is this rebuild's explicit point (see section 0 of the
 rebuild prompt). Revisit only if multi-project role variance becomes a
 hard, concrete requirement — that would be a deliberate, documented
 deviation at that point, not a default.
+
+**Superseded (narrowly), 2026-08-02**: multi-project access variance
+became exactly that concrete requirement — see
+**[ADR-0003](ADR-0003-project-membership.md)**. The role itself is still
+a single global column, unchanged; what's new is a `ProjectMembership`
+table gating *which* projects a non-ADMIN role can reach at all. This is
+the "deliberate, documented deviation" this section already anticipated,
+not a reversal of it.
 
 ### 3. Excel/ZIP export: server-side (pandas/openpyxl)
 

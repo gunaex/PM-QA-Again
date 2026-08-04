@@ -16,27 +16,33 @@ will be updated with real outcomes once that procedure has been run.
 
 | # | Item | Status | Evidence |
 |---|---|---|---|
-| 1 | Real Cloudflare R2 staging smoke test executed successfully | 🔴 **BLOCKED** | `scripts/r2_staging_smoke_test.py` exists and is correct (put/head/get/presigned-fetch/delete against a real bucket), but **has not been run** — no real Cloudflare credentials exist in this development environment. Procedure to run it: `docs/RELEASE_CLOSURE.md` §1. Record output in `docs/RELEASE_REHEARSAL.md` when done. |
+| 1 | Real Cloudflare R2 staging smoke test executed successfully | 🟢 **PASS** — 2026-08-02, human operator | `scripts/r2_staging_smoke_test.py` run by the human operator against the real staging R2 bucket. All 5 steps passed: PUT upload, HEAD existence, GET byte-for-byte + checksum, real presigned HTTP GET, DELETE cleanup. Final output: `ALL CHECKS PASSED — real R2 endpoint, credentials, upload, presigned download, and retrieval all confirmed working.` Recorded in full in `docs/RELEASE_REHEARSAL.md`. |
 | 2 | Screen Capture API real-browser acceptance | 🔴 **BLOCKED** | `getDisplayMedia` cannot be exercised in a headless test browser. Needs a human tester, in a real browser, confirming screen capture → upload works. Shares the upload code path already verified via file input (lower residual risk, but not zero). Procedure: `docs/RELEASE_CLOSURE.md` §2. |
 | 3 | Clipboard-paste real-browser acceptance | 🔴 **BLOCKED** | Same category as #2 — needs a synthetic `ClipboardEvent` with real image bytes that headless automation can't reliably produce; needs human verification. Procedure: `docs/RELEASE_CLOSURE.md` §3. |
 
 **Do not describe this application as production-ready while any of the
-above three remain BLOCKED**, per explicit instruction. Everything below
-this line is done and verified, but does not override the three items
-above.
+above three remain BLOCKED.** Item 1 is now resolved; items 2 and 3
+remain BLOCKED and still gate any production-readiness claim. Everything
+below this line is done and verified, but does not override the two
+still-open items above.
 
 ## Automated test coverage (all passing — see `docs/RELEASE_REHEARSAL.md` for the exact run)
 
-- 41 backend pytest tests across: evidence storage lifecycle (Phase 5),
-  R2 backend behavior via moto (Phase 5/6), evidence-storage
-  concurrency/reconciliation (Phase 6), reports/dashboard/export
-  correctness (Phase 6), and Phase 7's new security-boundary/evidence-
-  abuse/export-security suites.
-- Frontend: `npm run build` succeeds; every phase's UI has been
-  Playwright-verified against a real headed/rendered browser at the time
-  it was built (Phases 1, 3, 4, 5, 6) — no new frontend code was added in
-  Phase 7 (backend-only + documentation), so no new Playwright run was
-  required for this phase specifically.
+- **95 backend pytest tests** (up from 41 at Phase 7), covering Track A
+  (evidence storage lifecycle, R2 backend via moto, evidence-storage
+  concurrency/reconciliation, reports/dashboard/export correctness,
+  security boundaries/evidence-abuse/export-security) plus Track B/
+  hybrid (workflow runs, checkpoints, timing/reports, hybrid Excel/ZIP
+  export, and 17 adversarial security tests backing
+  `docs/HYBRID_RUNNER_THREAT_MODEL.md`).
+- Frontend: `npm run build` succeeds (verified fresh, see
+  `docs/hybrid/HYB5_CLEAN_REHEARSAL.md`).
+- Runner: `tsc --noEmit` clean (verified fresh, same rehearsal).
+- Real headed-Chromium hybrid execution (72 real steps, real
+  checkpoint pause/human-decision/same-session-resume, real sensitive-
+  variable injection, a real genuine failure, a real deliberate
+  retry-after-fix that passed) — see
+  `docs/hybrid/HYB5_REAL_BROWSER_VERIFICATION.md`.
 
 ## Security checks (Phase 7 — see `docs/THREAT_MODEL.md` for full detail)
 
@@ -78,8 +84,15 @@ above.
 
 ## Accepted limitations (not release blockers, explicitly carried forward)
 
-- Hybrid execution beyond HYB-0 remains disabled (scope boundary, not a
-  defect).
+- **RunnerToken global (not per-project) scope — accepted for INTERNAL
+  MVP DEPLOYMENT ONLY**, under documented controls (trusted internal
+  users only, secret-only credential storage, operational registration/
+  revocation, verified rotation procedure, approved-machines-only
+  distribution). A post-MVP backlog item exists for project/environment-
+  scoped runner credentials. **Public or customer-facing multi-tenant
+  deployment remains blocked until that scoping work exists** — this
+  model must never be described as suitable for that use case. Full
+  detail: `docs/HYBRID_RUNNER_THREAT_MODEL.md` §4, `docs/HANDOVER.md` §4.
 - No hard-delete/purge for evidence (deliberate; no retention policy was
   requested this phase).
 - No UI for user management, defect creation, or sign-off recording

@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react'
-import { useParams, useOutletContext, NavLink } from 'react-router-dom'
-import { getDashboard } from '../api/client'
+import { useParams, useOutletContext, useNavigate, NavLink } from 'react-router-dom'
+import { LayoutDashboard, Play } from 'lucide-react'
+import { getDashboard, getContinueLastTest } from '../api/client'
 import StatusBadge from '../components/StatusBadge.jsx'
+import StartTestingModal from '../components/StartTestingModal.jsx'
+import { DashboardSkeleton } from '../components/PageSkeleton.jsx'
 
 const TILE_LABELS = {
   NOT_RUN: 'Not Run',
@@ -14,9 +17,12 @@ const TILE_LABELS = {
 export default function Dashboard() {
   const { slug } = useParams()
   const { project } = useOutletContext()
+  const navigate = useNavigate()
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [showStartTesting, setShowStartTesting] = useState(false)
+  const [continueTarget, setContinueTarget] = useState(null)
 
   useEffect(() => {
     setLoading(true)
@@ -24,7 +30,28 @@ export default function Dashboard() {
       .then(setData)
       .catch(() => setError('Could not reach the backend.'))
       .finally(() => setLoading(false))
+    getContinueLastTest(slug)
+      .then(setContinueTarget)
+      .catch(() => setContinueTarget(null))
   }, [slug])
+
+  const startTestingButton = (
+    <button
+      onClick={() => setShowStartTesting(true)}
+      className="px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-md hover:bg-emerald-700 flex items-center gap-1.5"
+    >
+      <Play size={16} />
+      Start Testing
+    </button>
+  )
+  const continueButton = continueTarget && (
+    <button
+      onClick={() => navigate(`/${slug}/cycles/${continueTarget.cycle_id}?resultId=${continueTarget.result_id}`)}
+      className="px-4 py-2 border border-emerald-300 text-emerald-700 text-sm font-medium rounded-md hover:bg-emerald-50"
+    >
+      Continue Last Test
+    </button>
+  )
 
   const projectCard = project && (
     <div className="bg-white border border-gray-200 rounded-lg p-4 flex items-center justify-between">
@@ -40,13 +67,18 @@ export default function Dashboard() {
     </div>
   )
 
-  if (loading) return <p className="text-gray-500 text-sm">Loading…</p>
+  if (loading) return <DashboardSkeleton />
   if (error) return <p className="text-sm text-red-600">{error}</p>
   if (!data?.cycle)
     return (
       <div className="space-y-4">
         {projectCard}
+        <div className="flex items-center gap-2 flex-wrap">
+          {startTestingButton}
+          {continueButton}
+        </div>
         <p className="text-gray-500 text-sm">{data?.message || 'No data yet.'}</p>
+        {showStartTesting && <StartTestingModal slug={slug} onClose={() => setShowStartTesting(false)} />}
       </div>
     )
 
@@ -56,7 +88,14 @@ export default function Dashboard() {
     <div className="space-y-6">
       {projectCard}
       <div className="flex items-center gap-2 flex-wrap">
-        <h2 className="text-xl font-semibold text-gray-900">Dashboard</h2>
+        {startTestingButton}
+        {continueButton}
+      </div>
+      <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-3">
+          <LayoutDashboard size={22} className="text-emerald-600" />
+          <h2 className="text-xl font-semibold text-gray-900">Dashboard</h2>
+        </div>
         <span className="text-sm text-gray-500">— {cycle.name}</span>
         <StatusBadge status={cycle.status} />
         <NavLink to={`/${slug}/cycles/${cycle.id}`} className="ml-auto text-sm text-emerald-600 hover:underline">
@@ -151,6 +190,7 @@ export default function Dashboard() {
           </ul>
         )}
       </div>
+      {showStartTesting && <StartTestingModal slug={slug} onClose={() => setShowStartTesting(false)} />}
     </div>
   )
 }

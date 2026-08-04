@@ -1,8 +1,12 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
+import { BookOpen, Plus } from 'lucide-react'
+import { toast } from 'sonner'
 import { listSuites, createSuite } from '../api/client'
 import { useAuth } from '../auth/AuthContext.jsx'
 import StatusBadge from '../components/StatusBadge.jsx'
+import EmptyState from '../components/EmptyState.jsx'
+import { CardSkeleton } from '../components/PageSkeleton.jsx'
 
 const SUITE_TYPES = ['REGRESSION', 'UAT', 'SMOKE', 'INTEGRATION', 'OTHER']
 
@@ -38,7 +42,10 @@ export default function SuiteList() {
       const suite = await createSuite(slug, { name: name.trim(), suite_type: suiteType })
       setName('')
       setSuites((prev) => [suite, ...prev])
+      toast.success(`Suite "${suite.name}" created`)
       navigate(`/${slug}/suites/${suite.id}`)
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to create suite')
     } finally {
       setCreating(false)
     }
@@ -46,7 +53,8 @@ export default function SuiteList() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center gap-3">
+        <BookOpen size={22} className="text-emerald-600" />
         <h2 className="text-xl font-semibold text-gray-900">Test Suites</h2>
       </div>
 
@@ -72,15 +80,16 @@ export default function SuiteList() {
           <button
             type="submit"
             disabled={creating}
-            className="px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-md hover:bg-emerald-700 disabled:opacity-50"
+            className="px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-md hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-1.5"
           >
+            <Plus size={16} />
             {creating ? 'Creating…' : 'New Suite'}
           </button>
         </form>
       )}
 
       {loading ? (
-        <p className="text-gray-500 text-sm">Loading…</p>
+        <CardSkeleton count={6} />
       ) : loadError ? (
         <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-md px-4 py-3">
           <p>{loadError}</p>
@@ -89,7 +98,11 @@ export default function SuiteList() {
           </button>
         </div>
       ) : suites.length === 0 ? (
-        <p className="text-gray-500 text-sm">No test suites yet. Create one above.</p>
+        <EmptyState
+          icon={BookOpen}
+          title="No test suites yet"
+          description="Create your first test suite to organize test cases."
+        />
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {suites.map((s) => (

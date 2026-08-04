@@ -8,10 +8,10 @@ from .. import models, schemas
 from ..database import get_project_db
 from ..excel_utils import make_excel_response, make_template_response, read_import_excel, read_import_csv
 from ..activity import log_changes
-from ..auth import get_current_user, require_tester
+from ..auth import require_tester, require_project_access
 
 router = APIRouter(
-    prefix="/api/{slug}/revisions/{revision_id}/cases", tags=["test-cases"], dependencies=[Depends(get_current_user)]
+    prefix="/api/{slug}/revisions/{revision_id}/cases", tags=["test-cases"], dependencies=[Depends(require_project_access)]
 )
 
 # Matches the rebuild prompt's "Excel/CSV importer" required column set

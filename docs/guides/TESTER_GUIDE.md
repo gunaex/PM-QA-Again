@@ -7,6 +7,15 @@ cycles, capture evidence.
 
 Same as any user — sign in, set a new password on first login if asked.
 
+## Project access
+
+You only see and can act on projects an admin has explicitly assigned
+to you (Projects page shows just those). If a project you expect is
+missing, ask an admin to grant it on the **Users** page — nothing is
+automatic, even for a project you'd normally be the one working in. You
+also can't create a new project yourself (ADMIN-only) — ask an admin to
+create it, then assign you to it.
+
 ## Authoring a test suite
 
 1. **Test Suites** tab → **New Suite** (name + type: REGRESSION/UAT/

@@ -14,7 +14,7 @@ from ..database import (
     project_db_path,
     dispose_project_engine,
 )
-from ..auth import get_current_user, require_tester, require_admin, verify_password
+from ..auth import get_current_user, require_admin, require_project_access, verify_password
 from ..quota import quota_status
 
 router = APIRouter(prefix="/api/projects", tags=["projects"], dependencies=[Depends(get_current_user)])
@@ -36,7 +36,10 @@ def slugify(name: str) -> str:
 def create_project(
     payload: schemas.ProjectCreate,
     db: Session = Depends(get_master_db),
-    _user: models.User = Depends(require_tester),
+    # ADR-0003: only ADMIN creates a project -- TESTER/VIEWER access is
+    # always explicitly assigned afterward via project-membership, never
+    # implicit from having created it.
+    _user: models.User = Depends(require_admin),
 ):
     base_slug = slugify(payload.name)
     slug = base_slug
@@ -64,18 +67,22 @@ def create_project(
 def list_projects(
     include_archived: bool = Query(False),
     db: Session = Depends(get_master_db),
+    user: models.User = Depends(get_current_user),
 ):
     q = db.query(models.Project)
     if not include_archived:
         q = q.filter(models.Project.archived == False)  # noqa: E712
+    # ADR-0003: ADMIN sees every project; TESTER/VIEWER only see projects
+    # they have an explicit ProjectMembership row for.
+    if user.role != "ADMIN":
+        member_project_ids = db.query(models.ProjectMembership.project_id).filter(models.ProjectMembership.user_id == user.id)
+        q = q.filter(models.Project.id.in_(member_project_ids))
     return q.order_by(models.Project.created_at.desc()).all()
 
 
 @router.get("/{slug}", response_model=schemas.ProjectOut)
-def get_project(slug: str, db: Session = Depends(get_master_db)):
+def get_project(slug: str, db: Session = Depends(get_master_db), _access: models.User = Depends(require_project_access)):
     project = db.query(models.Project).filter(models.Project.slug == slug).first()
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
     if not project_db_exists(slug):
         get_project_engine(slug)
     return project
@@ -136,6 +143,7 @@ def get_storage_quota(
     slug: str,
     master_db: Session = Depends(get_master_db),
     project_db: Session = Depends(get_project_db),
+    _access: models.User = Depends(require_project_access),
 ):
     project = master_db.query(models.Project).filter(models.Project.slug == slug).first()
     if not project:

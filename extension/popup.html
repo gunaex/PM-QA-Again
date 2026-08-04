@@ -1,0 +1,62 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>QA-Again Recorder</title>
+  <style>
+    body { font-family: system-ui, sans-serif; width: 320px; padding: 12px; margin: 0; color: #111; }
+    h1 { font-size: 14px; margin: 0 0 10px; }
+    label { display: block; font-size: 11px; color: #555; margin-top: 8px; }
+    input, textarea { width: 100%; box-sizing: border-box; padding: 6px; font-size: 12px; border: 1px solid #ccc; border-radius: 4px; margin-top: 2px; font-family: inherit; }
+    textarea { resize: vertical; min-height: 54px; }
+    button { margin-top: 10px; width: 100%; padding: 8px; font-size: 12px; border: none; border-radius: 4px; cursor: pointer; }
+    .primary { background: #059669; color: white; }
+    .row { display: flex; gap: 6px; }
+    .row button { margin-top: 8px; }
+    .secondary { background: #eee; color: #111; }
+    .danger { background: #dc2626; color: white; }
+    #status { margin-top: 10px; font-size: 11px; padding: 6px; border-radius: 4px; background: #f3f4f6; white-space: pre-wrap; }
+    #connectForm.hidden, #controls.hidden { display: none; }
+    details { margin-top: 10px; }
+    summary { font-size: 11px; color: #555; cursor: pointer; }
+    .hint { font-size: 10px; color: #888; margin-top: 2px; }
+  </style>
+</head>
+<body>
+  <h1>QA-Again Recorder</h1>
+
+  <div id="connectForm">
+    <label>Pairing code (from QA-Again Record or Run Test)</label>
+    <textarea id="pairingCode" placeholder="Paste the one-line pairing code here"></textarea>
+    <p class="hint">For Run Test: copy the code, switch to the target tab, then open this extension.</p>
+    <button id="connectBtn" class="primary">Use This Tab</button>
+
+    <details>
+      <summary>Advanced: enter fields manually instead</summary>
+      <label>Backend URL</label>
+      <input id="backendUrl" placeholder="http://127.0.0.1:8000" />
+      <label>Project slug</label>
+      <input id="projectSlug" placeholder="your-project-slug" />
+      <label>Recording session ID</label>
+      <input id="sessionId" placeholder="created in QA-Again first" />
+      <label>Extension authorization token</label>
+      <input id="extensionToken" placeholder="short-lived token" />
+    </details>
+  </div>
+
+  <div id="controls" class="hidden">
+    <div class="row">
+      <button id="pauseBtn" class="secondary">Pause</button>
+      <button id="resumeBtn" class="secondary">Resume</button>
+    </div>
+    <div class="row">
+      <button id="undoBtn" class="secondary">Undo last action</button>
+    </div>
+    <button id="stopBtn" class="danger">Stop</button>
+  </div>
+
+  <div id="status">Not connected.</div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

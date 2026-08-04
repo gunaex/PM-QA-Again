@@ -1,9 +1,9 @@
-import { chromium } from "playwright";
 import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RunnerConfig } from "../env.js";
 import { QaAgainClient } from "../api/client.js";
+import { launchTrackedBrowser } from "./browserRun.js";
 
 /**
  * HYB-0 spike scenario, locked to exactly what
@@ -29,10 +29,10 @@ export async function runSpike(config: RunnerConfig): Promise<void> {
 
   // headless: false — gate criterion 1: the browser must be actually
   // visible, not a headless process claiming to have "seen" something.
-  const browser = await chromium.launch({ headless: false, slowMo: 300 });
+  const browserRun = await launchTrackedBrowser({ label: `spike-run${run.id}`, headless: false, slowMo: 300 });
 
   try {
-    const page = await browser.newPage();
+    const page = browserRun.page;
 
     console.log("[runner] step 1: NAVIGATE");
     await client.postEvent(run.id, "STEP_STARTED", { step: 1, action: "NAVIGATE", target: "/login" });
@@ -84,6 +84,6 @@ export async function runSpike(config: RunnerConfig): Promise<void> {
     const finished = await client.finishRun(run.id);
     console.log(`[runner] run ${finished.id} finished with status ${finished.status}`);
   } finally {
-    await browser.close();
+    await browserRun.close();
   }
 }

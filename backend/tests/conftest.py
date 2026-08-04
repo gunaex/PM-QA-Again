@@ -11,7 +11,9 @@ os.environ["DATA_DIR"] = TEST_DATA_DIR
 os.environ["JWT_SECRET_KEY"] = "test-secret-not-for-production"
 os.environ["ADMIN_EMAIL"] = "admin@example.com"
 os.environ["ADMIN_PASSWORD"] = "changeme123"
+os.environ["ALLOW_LOCAL_DEV_ORIGINS"] = "true"
 os.environ.setdefault("STORAGE_BACKEND", "filesystem")
+os.environ.setdefault("EXECUTION_PROVIDER", "local")
 
 import struct
 import zlib

@@ -3,12 +3,12 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from ..database import get_project_db, get_master_db
-from ..auth import get_current_user
+from ..auth import get_current_user, require_project_access
 from ..storage import EvidenceStorage, get_evidence_storage
 from ..report_excel import build_workbook, workbook_to_bytes
 from ..report_zip import build_evidence_package
 
-router = APIRouter(prefix="/api/{slug}/cycles/{cycle_id}/export", tags=["export"], dependencies=[Depends(get_current_user)])
+router = APIRouter(prefix="/api/{slug}/cycles/{cycle_id}/export", tags=["export"], dependencies=[Depends(require_project_access)])
 
 
 def _get_project_and_cycle(slug: str, cycle_id: int, db: Session, master_db: Session):

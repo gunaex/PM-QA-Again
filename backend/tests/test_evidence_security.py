@@ -105,7 +105,14 @@ def test_viewer_can_download_evidence_but_not_upload_or_archive(auth_client, pro
     from fastapi.testclient import TestClient
     from app.main import app
 
-    auth_client.post("/api/auth/users", json={"email": "viewer2@example.com", "password": "ViewerPass123!", "role": "VIEWER"})
+    created = auth_client.post(
+        "/api/auth/users", json={"email": "viewer2@example.com", "password": "ViewerPass123!", "role": "VIEWER"}
+    )
+    # ADR-0003: grant explicit project-membership so this test keeps
+    # asserting the role boundary (read vs write) rather than the access
+    # boundary.
+    project_id = auth_client.get(f"/api/projects/{slug}").json()["id"]
+    auth_client.post(f"/api/auth/users/{created.json()['id']}/projects", json={"project_id": project_id})
     viewer = TestClient(app)
     viewer.headers.update({"Origin": "http://localhost:5173"})
     viewer.post("/api/auth/login", json={"email": "viewer2@example.com", "password": "ViewerPass123!"})

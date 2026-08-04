@@ -1,8 +1,13 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
+import { PlayCircle, Plus } from 'lucide-react'
+import { toast } from 'sonner'
 import { listCycles, createCycle, listSuites, listRevisions } from '../api/client'
 import { useAuth } from '../auth/AuthContext.jsx'
 import StatusBadge from '../components/StatusBadge.jsx'
+import EmptyState from '../components/EmptyState.jsx'
+
+const ENVIRONMENTS = ['NON-PROD', 'PROD', 'UAT', 'STR', 'Other']
 
 export default function CycleList() {
   const { slug } = useParams()
@@ -17,11 +22,16 @@ export default function CycleList() {
   const [loadError, setLoadError] = useState(null)
   const [creating, setCreating] = useState(false)
   const [form, setForm] = useState({ suite_id: '', script_revision_id: '', name: '', environment: '', target_base_url: '' })
+  // 'Other' shows a free-text input below the dropdown; any fixed choice
+  // writes straight into form.environment (the value actually submitted).
+  const [environmentChoice, setEnvironmentChoice] = useState('')
 
   const load = () => {
     setLoading(true)
     setLoadError(null)
-    Promise.all([listCycles(slug), listSuites(slug)])
+    // Quick Manual Tests are real test history and must remain visible
+    // after the tester starts another quick case.
+    Promise.all([listCycles(slug, true), listSuites(slug)])
       .then(([c, s]) => {
         setCycles(c)
         setSuites(s)
@@ -55,6 +65,7 @@ export default function CycleList() {
         environment: form.environment.trim(),
         target_base_url: form.target_base_url.trim() || null,
       })
+      toast.success(`Cycle "${form.name.trim()}" created`)
       navigate(`/${slug}/cycles/${cycle.id}`)
     } catch (err) {
       setLoadError(err.response?.data?.detail || 'Could not create cycle')
@@ -65,7 +76,10 @@ export default function CycleList() {
 
   return (
     <div className="space-y-6">
-      <h2 className="text-xl font-semibold text-gray-900">Test Cycles</h2>
+      <div className="flex items-center gap-3">
+        <PlayCircle size={22} className="text-emerald-600" />
+        <h2 className="text-xl font-semibold text-gray-900">Test Cycles</h2>
+      </div>
 
       {canEdit && (
         <form onSubmit={handleCreate} className="bg-white border border-gray-200 rounded-lg p-5 space-y-3">
@@ -109,13 +123,35 @@ export default function CycleList() {
               onChange={(e) => setForm({ ...form, name: e.target.value })}
               className="px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
             />
-            <input
-              required
-              placeholder="Environment (e.g. staging)"
-              value={form.environment}
-              onChange={(e) => setForm({ ...form, environment: e.target.value })}
-              className="px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-            />
+            <div>
+              <select
+                required
+                value={environmentChoice}
+                onChange={(e) => {
+                  const choice = e.target.value
+                  setEnvironmentChoice(choice)
+                  setForm({ ...form, environment: choice === 'Other' ? '' : choice })
+                }}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              >
+                <option value="">Select environment…</option>
+                {ENVIRONMENTS.map((env) => (
+                  <option key={env} value={env}>
+                    {env}
+                  </option>
+                ))}
+              </select>
+              {environmentChoice === 'Other' && (
+                <input
+                  required
+                  autoFocus
+                  placeholder="Environment name"
+                  value={form.environment}
+                  onChange={(e) => setForm({ ...form, environment: e.target.value })}
+                  className="w-full mt-2 px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              )}
+            </div>
             <input
               placeholder="Target URL (optional)"
               value={form.target_base_url}
@@ -126,8 +162,9 @@ export default function CycleList() {
           <button
             type="submit"
             disabled={creating}
-            className="px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-md hover:bg-emerald-700 disabled:opacity-50"
+            className="px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-md hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-1.5"
           >
+            <Plus size={16} />
             {creating ? 'Creating…' : 'New Cycle'}
           </button>
         </form>
@@ -135,9 +172,17 @@ export default function CycleList() {
       {loadError && <p className="text-xs text-red-600">{loadError}</p>}
 
       {loading ? (
-        <p className="text-gray-500 text-sm">Loading…</p>
+        <div className="animate-pulse space-y-3">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="h-14 bg-gray-200 rounded-lg" />
+          ))}
+        </div>
       ) : cycles.length === 0 ? (
-        <p className="text-gray-500 text-sm">No test cycles yet.</p>
+        <EmptyState
+          icon={PlayCircle}
+          title="No test cycles yet"
+          description="Create a test cycle from a published revision to start executing test cases."
+        />
       ) : (
         <div className="bg-white border border-gray-200 rounded-lg divide-y divide-gray-100">
           {cycles.map((c) => (
@@ -149,6 +194,9 @@ export default function CycleList() {
               <div>
                 <div className="flex items-center gap-2">
                   <span className="font-medium text-gray-900">{c.name}</span>
+                  {c.is_system_generated && (
+                    <span className="px-1.5 py-0.5 text-[10px] rounded bg-emerald-50 text-emerald-700">Quick manual</span>
+                  )}
                   <StatusBadge status={c.status} />
                 </div>
                 <p className="text-xs text-gray-500 mt-0.5">{c.environment}</p>

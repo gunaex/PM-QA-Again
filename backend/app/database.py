@@ -37,8 +37,71 @@ MASTER_COLUMN_PATCHES: dict[str, dict[str, str]] = {
         "storage_quota_bytes": "INTEGER DEFAULT 5368709120",
         "storage_warning_thresholds": "TEXT DEFAULT '[70, 85, 95, 100]'",
     },
+    # HYB-2: registration/heartbeat fields on an existing runner_tokens row.
+    "runner_tokens": {
+        "runner_name": "TEXT",
+        "runner_version": "TEXT",
+        "os_metadata": "TEXT",
+        "browser_version": "TEXT",
+        "capabilities_json": "TEXT",
+        "last_heartbeat_at": "DATETIME",
+    },
 }
-PROJECT_COLUMN_PATCHES: dict[str, dict[str, str]] = {}
+PROJECT_COLUMN_PATCHES: dict[str, dict[str, str]] = {
+    # HYB-2: optional hybrid-evidence links on the existing evidence_items
+    # table (docs/hybrid/HYB-1-GAP-ANALYSIS-REFRESH.md decision 2).
+    "evidence_items": {
+        "workflow_run_id": "INTEGER",
+        "workflow_step_run_id": "INTEGER",
+        "checkpoint_decision_id": "INTEGER",
+        # HYB-5: server-side upload timing (read+sniff+hash+store).
+        "upload_duration_ms": "INTEGER",
+    },
+    # HYB-4: paused-checkpoint timestamp on existing workflow_runs rows,
+    # and provenance links on existing defects rows. Phase E adds
+    # is_preview to this same table (see the "workflow_runs" key note
+    # below -- dict keys must stay unique, so it's merged in here rather
+    # than as a second "workflow_runs" entry).
+    "workflow_runs": {
+        "checkpoint_waiting_since": "DATETIME",
+        "is_preview": "BOOLEAN DEFAULT 0",
+    },
+    # ADR-HYB-002: Chrome extension recorder link on existing
+    # recording_sessions rows.
+    "recording_sessions": {
+        "extension_authorization_id": "INTEGER",
+    },
+    # Quick Manual Test entry flow: hide-by-default flag on existing
+    # test_suites/test_cycles rows.
+    "test_suites": {
+        "is_system_generated": "BOOLEAN DEFAULT 0",
+    },
+    "test_cycles": {
+        "is_system_generated": "BOOLEAN DEFAULT 0",
+    },
+    "defects": {
+        "workflow_run_id": "INTEGER",
+        "workflow_step_run_id": "INTEGER",
+        "checkpoint_decision_id": "INTEGER",
+    },
+    # ADR-HYB-002 fix: idempotency_key was added to RecordedStep after
+    # some project databases already existed -- missing from this dict
+    # meant ensure_indexes() below tried to index a column that had
+    # never actually been added to those pre-existing recorded_steps
+    # tables ("no such column: idempotency_key" on every request that
+    # touched that project, since every request calls get_project_engine).
+    "recorded_steps": {
+        "idempotency_key": "TEXT",
+    },
+    # Phase D (macro-recorder simplification): per-step repeat count on
+    # existing workflow_steps rows.
+    "workflow_steps": {
+        "repeat_count": "INTEGER",
+    },
+    "workflow_step_runs": {
+        "duration_ms": "INTEGER",
+    },
+}
 
 # Additive index patches (docs/PERFORMANCE_FAST_PASS.md) — `CREATE INDEX
 # IF NOT EXISTS` is safe against both a fresh database (created via
@@ -62,13 +125,34 @@ PROJECT_COLUMN_PATCHES: dict[str, dict[str, str]] = {}
 PROJECT_INDEXES: dict[str, list[str]] = {
     "cycle_test_results": ["cycle_id", "test_case_id"],
     "cycle_result_history": ["cycle_test_result_id"],
-    "evidence_items": ["cycle_test_result_id", "cycle_id"],
+    "evidence_items": ["cycle_test_result_id", "cycle_id", "workflow_run_id", "checkpoint_decision_id"],
     "evidence_revisions": ["evidence_id"],
     "test_cases": ["revision_id", "suite_id"],
     "script_revisions": ["suite_id"],
-    "defects": ["cycle_id"],
+    "defects": ["cycle_id", "workflow_run_id", "checkpoint_decision_id"],
     "sign_offs": ["cycle_id"],
     "activity_log": ["changed_at"],
+    # HYB-1: workflow list/editor lookups (workflow_revisions.workflow_id
+    # for the revision-history list, workflow_steps.revision_id for the
+    # ordered step list, workflow_test_case_links for both directions of
+    # the case<->workflow link lookup).
+    "workflow_revisions": ["workflow_id"],
+    "workflow_steps": ["revision_id"],
+    "workflow_test_case_links": ["workflow_revision_id", "test_case_id"],
+    # HYB-2: run-list/claim/step-history/event lookups.
+    "workflow_runs": ["workflow_revision_id", "status", "cycle_test_result_id"],
+    "workflow_step_runs": ["workflow_run_id", "workflow_step_id"],
+    "workflow_run_screenshots": ["workflow_run_id", "workflow_step_id"],
+    "runner_execution_events": ["workflow_run_id", "event_type"],
+    # HYB-3: recording-session claim/list and recorded-step ordering.
+    "recording_sessions": ["workflow_id", "status"],
+    # ADR-HYB-002: extension-auth lookup by session (scoping check) and
+    # expiry sweep.
+    "recording_session_authorizations": ["recording_session_id", "expires_at"],
+    "recorded_steps": ["recording_session_id", "idempotency_key"],
+    # HYB-4: checkpoint-decision history lookups (by run, and by the
+    # (run,step) pair used to compute the next decision_revision_no).
+    "workflow_checkpoint_decisions": ["workflow_run_id", "workflow_step_id"],
 }
 
 

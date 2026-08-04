@@ -31,6 +31,11 @@ from .routers import (  # noqa: E402
     exports,
     runner_tokens,
     hybrid,
+    workflows,
+    workflow_runs,
+    recording_sessions,
+    hybrid_reports,
+    quick_test,
 )
 from .seed import seed_bootstrap_admin  # noqa: E402
 from .rate_limit import limiter  # noqa: E402
@@ -64,6 +69,8 @@ async def request_timing_log(request: Request, call_next):
     start = time.perf_counter()
     response = await call_next(request)
     duration_ms = (time.perf_counter() - start) * 1000
+    response.headers["Server-Timing"] = f'app;dur={duration_ms:.1f}'
+    response.headers["X-Response-Time-Ms"] = f"{duration_ms:.1f}"
     perf_logger.info("%s %s -> %s in %.1fms", request.method, request.url.path, response.status_code, duration_ms)
     return response
 
@@ -81,10 +88,13 @@ def rate_limit_handler(request: Request, exc: RateLimitExceeded):
 _allowed_origins = [
     o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "http://localhost:5173").split(",") if o.strip()
 ]
+_allow_local_dev_origins = os.environ.get("ALLOW_LOCAL_DEV_ORIGINS", "false").lower() in ("1", "true", "yes")
+_local_dev_origin_regex = r"http://(?:localhost|127\.0\.0\.1):\d+" if _allow_local_dev_origins else None
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
+    allow_origin_regex=_local_dev_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -96,6 +106,13 @@ def _origin_is_allowed(origin_or_referer: str) -> bool:
     # both sides to scheme+host before comparing.
     parsed = urlsplit(origin_or_referer)
     candidate = f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+    if (
+        _allow_local_dev_origins
+        and parsed.scheme == "http"
+        and parsed.hostname in ("localhost", "127.0.0.1")
+        and parsed.port is not None
+    ):
+        return True
     return any(candidate == o.rstrip("/") for o in _allowed_origins)
 
 
@@ -152,6 +169,11 @@ app.include_router(reports.router)
 app.include_router(exports.router)
 app.include_router(runner_tokens.router)
 app.include_router(hybrid.router)
+app.include_router(workflows.router)
+app.include_router(workflow_runs.router)
+app.include_router(recording_sessions.router)
+app.include_router(hybrid_reports.router)
+app.include_router(quick_test.router)
 
 
 @app.get("/api/health")

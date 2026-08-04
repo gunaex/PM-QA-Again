@@ -113,3 +113,80 @@ def create_user(
 @router.get("/users", response_model=list[schemas.UserOut])
 def list_users(db: Session = Depends(get_master_db), _admin: models.User = Depends(require_admin)):
     return db.query(models.User).order_by(models.User.id).all()
+
+
+@router.put("/users/{user_id}", response_model=schemas.UserOut)
+def set_user_active(
+    user_id: int,
+    payload: schemas.UserActiveUpdate,
+    db: Session = Depends(get_master_db),
+    _admin: models.User = Depends(require_admin),
+):
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    user.active = payload.active
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+# ---------- Project membership (ADR-0003) ----------
+# Which projects a TESTER/VIEWER can reach -- ADMIN always reaches every
+# project and never needs a row here (see require_project_access in
+# ../auth.py). Same require_admin gating as the user-management endpoints
+# above.
+
+
+@router.get("/users/{user_id}/projects", response_model=list[schemas.ProjectMembershipOut])
+def list_user_projects(user_id: int, db: Session = Depends(get_master_db), _admin: models.User = Depends(require_admin)):
+    if not db.query(models.User).filter(models.User.id == user_id).first():
+        raise HTTPException(status_code=404, detail="User not found")
+    rows = (
+        db.query(models.ProjectMembership, models.Project)
+        .join(models.Project, models.Project.id == models.ProjectMembership.project_id)
+        .filter(models.ProjectMembership.user_id == user_id)
+        .order_by(models.Project.name)
+        .all()
+    )
+    return [
+        schemas.ProjectMembershipOut(project_id=project.id, project_name=project.name, project_slug=project.slug)
+        for _membership, project in rows
+    ]
+
+
+@router.post("/users/{user_id}/projects", response_model=schemas.ProjectMembershipOut)
+def add_user_project(
+    user_id: int,
+    payload: schemas.ProjectMembershipCreate,
+    db: Session = Depends(get_master_db),
+    _admin: models.User = Depends(require_admin),
+):
+    if not db.query(models.User).filter(models.User.id == user_id).first():
+        raise HTTPException(status_code=404, detail="User not found")
+    project = db.query(models.Project).filter(models.Project.id == payload.project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    existing = (
+        db.query(models.ProjectMembership)
+        .filter(models.ProjectMembership.user_id == user_id, models.ProjectMembership.project_id == project.id)
+        .first()
+    )
+    if not existing:
+        db.add(models.ProjectMembership(user_id=user_id, project_id=project.id))
+        db.commit()
+    return schemas.ProjectMembershipOut(project_id=project.id, project_name=project.name, project_slug=project.slug)
+
+
+@router.delete("/users/{user_id}/projects/{project_id}")
+def remove_user_project(
+    user_id: int,
+    project_id: int,
+    db: Session = Depends(get_master_db),
+    _admin: models.User = Depends(require_admin),
+):
+    db.query(models.ProjectMembership).filter(
+        models.ProjectMembership.user_id == user_id, models.ProjectMembership.project_id == project_id
+    ).delete()
+    db.commit()
+    return {"ok": True}

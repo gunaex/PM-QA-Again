@@ -11,7 +11,9 @@ anything else works — that's expected.
 
 ## What you can see
 
-- **Projects** (`/`) — every non-archived project you have access to.
+- **Projects** (`/`) — every non-archived project an admin has
+  explicitly granted you access to (ask an admin to add you on the
+  **Users** page if one you expect is missing).
 - **Dashboard** (a project's default page) — total cases, PASS/NG/
   Blocked/Not Run/N-A counts, pass rate, evidence completeness, go-live
   readiness and its blockers, open defects by severity, storage usage,
@@ -39,9 +41,9 @@ they're hidden precisely because they won't work for you.
 
 ## If something looks wrong
 
-If a project or cycle you expect to see is missing, ask an admin — it
-may be archived, or you may not have been granted access to that
-specific... actually QA-Again's roles are global, not per-project (every
-VIEWER sees every non-archived project) — if a whole project is
-missing, it's archived; ask an admin to check the "Show archived"
-project list.
+If a whole project is missing from your list, it's one of two things:
+an admin hasn't granted you access to it yet (ask them to do so on the
+**Users** page — access is per-project, nothing is automatic), or it's
+archived (ask an admin to check the "Show archived" project list). If a
+cycle within a project you *can* see is missing, that's unrelated to
+access — ask an admin directly.

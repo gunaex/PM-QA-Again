@@ -3,6 +3,8 @@ why each denominator was chosen; the master spec left these genuinely
 undefined beyond "make it explicit" and "don't count NOT_RUN as PASS."
 """
 
+from datetime import datetime, date
+
 from sqlalchemy.orm import Session
 
 from . import models
@@ -19,18 +21,23 @@ def active_cycle(db: Session) -> models.TestCycle | None:
     )
 
 
-def result_counts(db: Session, cycle_id: int) -> dict:
+def result_counts(db: Session, cycle_id: int, date_from: date | None = None, date_to: date | None = None) -> dict:
     counts = {s: 0 for s in models.RESULT_STATUSES}
-    for status, _id in db.query(models.CycleTestResult.status, models.CycleTestResult.id).filter(
+    q = db.query(models.CycleTestResult.status, models.CycleTestResult.id).filter(
         models.CycleTestResult.cycle_id == cycle_id
-    ):
+    )
+    if date_from:
+        q = q.filter(models.CycleTestResult.executed_at >= datetime.combine(date_from, datetime.min.time()))
+    if date_to:
+        q = q.filter(models.CycleTestResult.executed_at <= datetime.combine(date_to, datetime.max.time()))
+    for status, _id in q:
         counts[status] += 1
     return counts
 
 
-def pass_rate(db: Session, cycle_id: int, counts: dict | None = None) -> dict:
+def pass_rate(db: Session, cycle_id: int, counts: dict | None = None, date_from: date | None = None, date_to: date | None = None) -> dict:
     if counts is None:
-        counts = result_counts(db, cycle_id)
+        counts = result_counts(db, cycle_id, date_from=date_from, date_to=date_to)
     total = sum(counts.values())
     approved_na = (
         db.query(models.CycleTestResult.id)

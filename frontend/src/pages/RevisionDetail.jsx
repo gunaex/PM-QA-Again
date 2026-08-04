@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { NavLink, useNavigate, useParams } from 'react-router-dom'
+import { toast } from 'sonner'
 import {
   getRevision,
   listCases,
@@ -13,10 +14,28 @@ import {
   importCasesExcel,
   importCasesCsv,
 } from '../api/client'
+import ConfirmDialog from '../components/ConfirmDialog.jsx'
 import { useAuth } from '../auth/AuthContext.jsx'
 import StatusBadge from '../components/StatusBadge.jsx'
 
 const MUTATION_LEVELS = ['UNSPECIFIED', 'READ_ONLY', 'MUTATING', 'MIXED']
+const PRIORITIES = ['', 'P0', 'P1', 'P2', 'P3']
+
+/** Suggests the next checkpoint code from the existing cases in this
+ * revision -- editable afterward, never enforced server-side (the
+ * backend still just requires uniqueness within the revision). Matches
+ * the most common prefix already in use (e.g. "REG-P0-") and increments
+ * its trailing number; falls back to "TC-001" for an empty revision. */
+function suggestNextCheckpointCode(cases) {
+  const matches = cases.map((c) => c.checkpoint_code?.match(/^(.*?)(\d+)$/)).filter(Boolean)
+  if (matches.length === 0) return 'TC-001'
+  const counts = {}
+  for (const m of matches) counts[m[1]] = (counts[m[1]] || 0) + 1
+  const prefix = Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0]
+  const width = matches.find((m) => m[1] === prefix)[2].length
+  const maxNum = Math.max(...matches.filter((m) => m[1] === prefix).map((m) => parseInt(m[2], 10)))
+  return `${prefix}${String(maxNum + 1).padStart(width, '0')}`
+}
 
 const emptyForm = {
   checkpoint_code: '',
@@ -48,6 +67,7 @@ export default function RevisionDetail() {
   const [showForm, setShowForm] = useState(false)
   const [saving, setSaving] = useState(false)
   const [importMsg, setImportMsg] = useState(null)
+  const [confirmPublish, setConfirmPublish] = useState(false)
 
   const isDraft = revision?.status === 'DRAFT'
 
@@ -111,14 +131,16 @@ export default function RevisionDetail() {
   const handleDelete = async (caseId) => {
     await deleteCase(slug, revisionId, caseId)
     setCases((prev) => prev.filter((c) => c.id !== caseId))
+    toast.success('Test case deleted')
   }
 
   const handlePublish = async () => {
-    if (!window.confirm('Publish this revision? Published content becomes immutable — corrections require cloning a new draft.')) return
     setError(null)
+    setConfirmPublish(false)
     try {
       const updated = await publishRevision(slug, suiteId, revisionId)
       setRevision(updated)
+      toast.success('Revision published')
     } catch (err) {
       setError(err.response?.data?.detail || 'Could not publish this revision')
     }
@@ -204,7 +226,8 @@ export default function RevisionDetail() {
             </label>
             <button
               onClick={() => {
-                resetForm()
+                setForm({ ...emptyForm, checkpoint_code: suggestNextCheckpointCode(cases) })
+                setEditingId(null)
                 setShowForm(true)
               }}
               className="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-md hover:bg-emerald-700"
@@ -215,7 +238,7 @@ export default function RevisionDetail() {
         )}
         {isDraft && isAdmin && (
           <button
-            onClick={handlePublish}
+            onClick={() => setConfirmPublish(true)}
             disabled={cases.length === 0}
             className="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-md hover:bg-emerald-700 disabled:opacity-50"
           >
@@ -236,13 +259,16 @@ export default function RevisionDetail() {
         <form onSubmit={handleSubmit} className="bg-white border border-gray-200 rounded-lg p-5 space-y-3">
           <h3 className="font-medium text-gray-900">{editingId ? 'Edit test case' : 'New test case'}</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <input
-              required
-              placeholder="Checkpoint code (e.g. REG-P0-001)"
-              value={form.checkpoint_code}
-              onChange={(e) => setForm({ ...form, checkpoint_code: e.target.value })}
-              className="px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-            />
+            <div>
+              <input
+                required
+                placeholder="Checkpoint code"
+                value={form.checkpoint_code}
+                onChange={(e) => setForm({ ...form, checkpoint_code: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+              {!editingId && <p className="text-[11px] text-gray-400 mt-0.5">Auto-suggested — change it if you need a specific code.</p>}
+            </div>
             <input
               required
               placeholder="Title"
@@ -250,12 +276,17 @@ export default function RevisionDetail() {
               onChange={(e) => setForm({ ...form, title: e.target.value })}
               className="px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
             />
-            <input
-              placeholder="Priority (e.g. P0, P1)"
+            <select
               value={form.priority}
               onChange={(e) => setForm({ ...form, priority: e.target.value })}
               className="px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-            />
+            >
+              {PRIORITIES.map((p) => (
+                <option key={p} value={p}>
+                  {p || 'Priority (not set)'}
+                </option>
+              ))}
+            </select>
             <select
               value={form.mutation_level}
               onChange={(e) => setForm({ ...form, mutation_level: e.target.value })}
@@ -369,6 +400,15 @@ export default function RevisionDetail() {
           </table>
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmPublish}
+        onClose={() => setConfirmPublish(false)}
+        onConfirm={handlePublish}
+        title="Publish this revision?"
+        message="Published content becomes immutable — corrections require cloning a new draft."
+        confirmLabel="Publish"
+      />
     </div>
   )
 }

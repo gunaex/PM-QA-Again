@@ -24,10 +24,15 @@ class UserOut(BaseModel):
     id: int
     email: str
     role: str
+    active: bool
     must_change_password: bool
 
     class Config:
         from_attributes = True
+
+
+class UserActiveUpdate(BaseModel):
+    active: bool
 
 
 class ProjectCreate(BaseModel):
@@ -54,6 +59,19 @@ class ProjectOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# ---------- Project membership (ADR-0003) ----------
+
+
+class ProjectMembershipCreate(BaseModel):
+    project_id: int
+
+
+class ProjectMembershipOut(BaseModel):
+    project_id: int
+    project_name: str
+    project_slug: str
 
 
 # ---------- Test suites ----------
@@ -84,6 +102,7 @@ class TestSuiteOut(BaseModel):
     created_by: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+    is_system_generated: bool = False
 
     class Config:
         from_attributes = True
@@ -205,6 +224,36 @@ class RunnerTokenOut(BaseModel):
     id: int
     label: str
     token: str  # raw token — returned once, at creation, never again
+
+
+class RunnerRegistrationOut(BaseModel):
+    """HYB-2: the admin-facing runner list — never includes the raw
+    token or its hash, only registration/heartbeat metadata."""
+
+    id: int
+    label: str
+    revoked: bool
+    runner_name: Optional[str] = None
+    runner_version: Optional[str] = None
+    os_metadata: Optional[str] = None
+    browser_version: Optional[str] = None
+    capabilities_json: Optional[str] = None
+    last_heartbeat_at: Optional[datetime] = None
+    created_at: datetime
+    # Computed, not stored: ONLINE (heartbeat within the lease window),
+    # STALE (heartbeat exists but is old), OFFLINE (never heartbeated),
+    # REVOKED.
+    status: str = "OFFLINE"
+
+    class Config:
+        from_attributes = True
+
+
+class RunnerFleetStatusOut(BaseModel):
+    """The non-admin-safe subset of runner status -- just "will a queued
+    run ever get picked up," no labels/ids."""
+
+    any_online: bool
 
 
 class HybridRunCreate(BaseModel):
@@ -334,9 +383,40 @@ class TestCycleOut(BaseModel):
     locked_at: Optional[datetime] = None
     locked_by: Optional[str] = None
     result_counts: Optional[ResultCounts] = None
+    is_system_generated: bool = False
 
     class Config:
         from_attributes = True
+
+
+# ---------- Quick Manual Test entry flow ----------
+
+
+class QuickTestCreate(BaseModel):
+    title: str
+    expected_result_md: Optional[str] = None
+    environment: Optional[str] = None
+    require_evidence_for_pass: bool = True
+
+
+class QuickTestOut(BaseModel):
+    cycle: TestCycleOut
+    result_id: int
+
+
+class RunNowRequest(BaseModel):
+    environment: Optional[str] = None
+    require_evidence_for_pass: bool = True
+
+
+class RerunCycleRequest(BaseModel):
+    mode: str  # "all" | "fail_blocked" | "selected"
+    case_ids: Optional[list[int]] = None
+
+
+class ContinueLastTestOut(BaseModel):
+    cycle_id: int
+    result_id: int
 
 
 class CycleTestResultUpdate(BaseModel):
@@ -440,6 +520,9 @@ class EvidenceItemOut(BaseModel):
     status: str
     evidence_source: str
     created_at: datetime
+    workflow_run_id: Optional[int] = None
+    workflow_step_run_id: Optional[int] = None
+    checkpoint_decision_id: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -492,6 +575,10 @@ class DefectCreate(BaseModel):
     description_md: Optional[str] = None
     severity: str = "UNSPECIFIED"
     external_url: Optional[str] = None
+    # HYB-4: optional provenance links from a checkpoint review.
+    workflow_run_id: Optional[int] = None
+    workflow_step_run_id: Optional[int] = None
+    checkpoint_decision_id: Optional[int] = None
 
 
 class DefectUpdate(BaseModel):
@@ -500,6 +587,11 @@ class DefectUpdate(BaseModel):
     severity: Optional[str] = None
     status: Optional[str] = None
     external_url: Optional[str] = None
+    # HYB-4: lets a checkpoint reviewer link an *existing* defect to this
+    # run/step/decision, not just create a brand new one.
+    workflow_run_id: Optional[int] = None
+    workflow_step_run_id: Optional[int] = None
+    checkpoint_decision_id: Optional[int] = None
 
 
 class DefectOut(BaseModel):
@@ -515,6 +607,9 @@ class DefectOut(BaseModel):
     created_by: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+    workflow_run_id: Optional[int] = None
+    workflow_step_run_id: Optional[int] = None
+    checkpoint_decision_id: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -538,3 +633,585 @@ class SignOffOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# ---------- HYB-1: workflow model and editor ----------
+
+
+class WorkflowDefinitionCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+
+
+class WorkflowDefinitionOut(BaseModel):
+    id: int
+    name: str
+    description: Optional[str] = None
+    status: str
+    created_by: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    # Convenience for the list screen — avoids a second round trip per row.
+    published_revision_id: Optional[int] = None
+    published_revision_label: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class WorkflowRevisionCreate(BaseModel):
+    revision_label: str
+    change_summary: Optional[str] = None
+
+
+class WorkflowRevisionCloneRequest(BaseModel):
+    revision_label: str
+    change_summary: Optional[str] = None
+
+
+class WorkflowRevisionOut(BaseModel):
+    id: int
+    workflow_id: int
+    revision_label: str
+    revision_number_sort: int
+    status: str
+    change_summary: Optional[str] = None
+    supersedes_revision_id: Optional[int] = None
+    created_by: Optional[str] = None
+    published_by: Optional[str] = None
+    published_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class WorkflowStepCreate(BaseModel):
+    step_type: str
+    description: Optional[str] = None
+    locator_strategy: Optional[str] = None
+    locator_value: Optional[str] = None
+    locator_fallbacks_json: Optional[str] = None
+    locator_source: str = "MANUAL"
+    input_value: Optional[str] = None
+    is_sensitive: bool = False
+    timeout_ms: Optional[int] = None
+    expected_value: Optional[str] = None
+    enabled: bool = True
+    checkpoint_instructions: Optional[str] = None
+    evidence_policy: str = "NONE"
+    repeat_count: Optional[int] = None
+
+
+class WorkflowStepUpdate(BaseModel):
+    step_type: Optional[str] = None
+    description: Optional[str] = None
+    locator_strategy: Optional[str] = None
+    locator_value: Optional[str] = None
+    locator_fallbacks_json: Optional[str] = None
+    locator_source: Optional[str] = None
+    input_value: Optional[str] = None
+    is_sensitive: Optional[bool] = None
+    timeout_ms: Optional[int] = None
+    expected_value: Optional[str] = None
+    enabled: Optional[bool] = None
+    checkpoint_instructions: Optional[str] = None
+    evidence_policy: Optional[str] = None
+    repeat_count: Optional[int] = None
+
+
+class WorkflowStepOut(BaseModel):
+    id: int
+    revision_id: int
+    sequence_no: int
+    step_type: str
+    description: Optional[str] = None
+    locator_strategy: Optional[str] = None
+    locator_value: Optional[str] = None
+    locator_fallbacks_json: Optional[str] = None
+    locator_source: str
+    input_value: Optional[str] = None
+    is_sensitive: bool
+    timeout_ms: Optional[int] = None
+    expected_value: Optional[str] = None
+    enabled: bool
+    checkpoint_instructions: Optional[str] = None
+    evidence_policy: str
+    repeat_count: Optional[int] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class WorkflowStepReorderRequest(BaseModel):
+    step_ids_in_order: list[int]
+
+
+class WorkflowTestCaseLinkCreate(BaseModel):
+    test_case_id: int
+
+
+class WorkflowTestCaseLinkOut(BaseModel):
+    id: int
+    workflow_revision_id: int
+    test_case_id: int
+    logical_case_key: Optional[str] = None
+    created_by: Optional[str] = None
+    created_at: datetime
+    # Flattened for the editor's link list.
+    checkpoint_code: Optional[str] = None
+    case_title: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+# ---------- HYB-2: runner registration and execution ----------
+
+
+class WorkflowRunCreate(BaseModel):
+    workflow_revision_id: int
+    cycle_test_result_id: Optional[int] = None
+
+
+class WorkflowPreviewRunCreate(BaseModel):
+    """No cycle_test_result_id field at all -- a preview run can never
+    be linked to Track A, not even optionally (see workflow_runs.py's
+    preview_run endpoint)."""
+
+    workflow_revision_id: int
+
+
+class WorkflowBrowserPrepareRequest(BaseModel):
+    workflow_revision_id: int
+
+
+class WorkflowBrowserTokenRequest(BaseModel):
+    extension_token: str
+
+
+class WorkflowBrowserStepResultRequest(WorkflowBrowserTokenRequest):
+    workflow_step_id: int
+    attempt_number: int = 1
+    status: str
+    outcome: Optional[str] = None
+    failure_category: Optional[str] = None
+    machine_message: Optional[str] = None
+    locator_used_json: Optional[str] = None
+    duration_ms: Optional[int] = None
+
+
+class WorkflowBrowserScreenshotRequest(WorkflowBrowserTokenRequest):
+    workflow_step_id: int
+    data_url: str
+
+
+class WorkflowBrowserCompleteRequest(WorkflowBrowserTokenRequest):
+    status: str
+    result_summary: Optional[str] = None
+
+
+class WorkflowRunOut(BaseModel):
+    id: int
+    workflow_revision_id: int
+    cycle_test_result_id: Optional[int] = None
+    status: str
+    runner_id: Optional[int] = None
+    lease_expires_at: Optional[datetime] = None
+    cancel_requested: bool
+    queued_by: Optional[str] = None
+    started_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+    result_summary: Optional[str] = None
+    checkpoint_waiting_since: Optional[datetime] = None
+    is_preview: bool = False
+    created_at: datetime
+    updated_at: datetime
+    # Flattened for the run list.
+    workflow_name: Optional[str] = None
+    workflow_revision_label: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class WorkflowStepRunOut(BaseModel):
+    id: int
+    workflow_run_id: int
+    workflow_step_id: int
+    sequence_no: int
+    attempt_number: int
+    status: str
+    outcome: Optional[str] = None
+    failure_category: Optional[str] = None
+    machine_message: Optional[str] = None
+    locator_used_json: Optional[str] = None
+    duration_ms: Optional[int] = None
+    started_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+    created_at: datetime
+    # Flattened from the WorkflowStep this run executed -- lets the
+    # frontend's plain-language describeStep() render the exact same
+    # sentence here as in the step-authoring list (e.g. "Type into
+    # \"Email\"" instead of a generic "Type into an element"), since a
+    # step-run's own row never carries these itself.
+    step_type: Optional[str] = None
+    step_description: Optional[str] = None
+    locator_strategy: Optional[str] = None
+    locator_value: Optional[str] = None
+    input_value: Optional[str] = None
+    expected_value: Optional[str] = None
+    checkpoint_instructions: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class RunnerExecutionEventOut(BaseModel):
+    id: int
+    workflow_run_id: int
+    event_type: str
+    actor_type: str
+    idempotency_key: Optional[str] = None
+    payload_json: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class WorkflowRunScreenshotOut(BaseModel):
+    id: int
+    workflow_run_id: int
+    workflow_step_id: int
+    content_type: str
+    size_bytes: int
+    sha256: str
+    captured_by: str
+    upload_duration_ms: Optional[int] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class WorkflowRunDetailOut(WorkflowRunOut):
+    step_runs: list[WorkflowStepRunOut] = []
+    events: list[RunnerExecutionEventOut] = []
+    screenshots: list[WorkflowRunScreenshotOut] = []
+
+
+class WorkflowRunClaimStep(BaseModel):
+    id: int
+    sequence_no: int
+    step_type: str
+    description: Optional[str] = None
+    locator_strategy: Optional[str] = None
+    locator_value: Optional[str] = None
+    locator_fallbacks_json: Optional[str] = None
+    input_value: Optional[str] = None
+    is_sensitive: bool
+    timeout_ms: Optional[int] = None
+    expected_value: Optional[str] = None
+    checkpoint_instructions: Optional[str] = None
+    evidence_policy: str
+    repeat_count: Optional[int] = None
+
+    class Config:
+        from_attributes = True
+
+
+class WorkflowBrowserPrepareOut(BaseModel):
+    run: WorkflowRunOut
+    pairing_code: str
+    expires_at: datetime
+
+
+class WorkflowBrowserPlanOut(BaseModel):
+    run: WorkflowRunOut
+    steps: list[WorkflowRunClaimStep]
+
+
+class WorkflowRunClaimOut(BaseModel):
+    """What a runner receives on a successful claim: the run plus every
+    step of the exact PUBLISHED revision it targets, in order."""
+
+    run: WorkflowRunOut
+    steps: list[WorkflowRunClaimStep]
+    lease_token: str
+    target_base_url: Optional[str] = None
+
+
+class RunnerHeartbeatRequest(BaseModel):
+    lease_token: Optional[str] = None
+
+
+class RunnerEventCreate(BaseModel):
+    event_type: str
+    actor_type: str = "RUNNER"
+    idempotency_key: Optional[str] = None
+    payload_json: Optional[str] = None
+    lease_token: str
+
+
+class StepRunStartRequest(BaseModel):
+    workflow_step_id: int
+    attempt_number: int = 1
+    lease_token: str
+
+
+class StepRunFinishRequest(BaseModel):
+    status: str
+    outcome: Optional[str] = None
+    failure_category: Optional[str] = None
+    machine_message: Optional[str] = None
+    locator_used_json: Optional[str] = None
+    lease_token: str
+
+
+class WorkflowRunCompleteRequest(BaseModel):
+    status: str
+    result_summary: Optional[str] = None
+    lease_token: str
+
+
+class WorkflowRunDispatchFailureRequest(BaseModel):
+    message: Optional[str] = None
+
+
+# ---------- HYB-3: browser workflow recorder ----------
+
+
+class RecordingSessionCreate(BaseModel):
+    workflow_id: int
+    target_url: str
+
+
+class RecordingSessionOut(BaseModel):
+    id: int
+    workflow_id: int
+    status: str
+    target_url: str
+    requested_by: Optional[str] = None
+    runner_id: Optional[int] = None
+    lease_expires_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class RecordedStepOut(BaseModel):
+    id: int
+    recording_session_id: int
+    sequence_no: int
+    step_type: str
+    description: Optional[str] = None
+    locator_strategy: Optional[str] = None
+    locator_value: Optional[str] = None
+    locator_fallbacks_json: Optional[str] = None
+    locator_warnings_json: Optional[str] = None
+    target_summary: Optional[str] = None
+    page_context: Optional[str] = None
+    diagnostic_x: Optional[int] = None
+    diagnostic_y: Optional[int] = None
+    input_value: Optional[str] = None
+    is_sensitive: bool
+    expected_value: Optional[str] = None
+    checkpoint_instructions: Optional[str] = None
+    needs_review: bool
+    review_note: Optional[str] = None
+    locator_test_requested: bool
+    locator_test_result_json: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class RecordingSessionDetailOut(RecordingSessionOut):
+    recorded_steps: list[RecordedStepOut] = []
+
+
+class RecordedStepCreate(BaseModel):
+    """What the runner posts for each captured DOM action. Deliberately
+    has no field for a sensitive value's real bytes -- the in-page
+    recorder script never sends one across the Node bridge in the first
+    place (see runner/src/recorder/domRecorder.ts)."""
+
+    step_type: str
+    description: Optional[str] = None
+    locator_strategy: Optional[str] = None
+    locator_value: Optional[str] = None
+    locator_fallbacks_json: Optional[str] = None
+    locator_warnings_json: Optional[str] = None
+    target_summary: Optional[str] = None
+    page_context: Optional[str] = None
+    diagnostic_x: Optional[int] = None
+    diagnostic_y: Optional[int] = None
+    input_value: Optional[str] = None
+    is_sensitive: bool = False
+    expected_value: Optional[str] = None
+    checkpoint_instructions: Optional[str] = None
+    needs_review: bool = False
+    review_note: Optional[str] = None
+    # Optional: a Playwright-mode runner supplies lease_token (matched
+    # against RunnerToken + RecordingSession.lease_token); an extension-
+    # mode caller instead supplies the X-Extension-Session-Token header
+    # -- see recording_sessions.py::_authorize_recorder_actor. Exactly
+    # one of the two must be present; enforced there, not by a schema
+    # validator, so the 401/409 error messages stay consistent with
+    # every other dual-auth check in this app.
+    lease_token: Optional[str] = None
+    extension_token: Optional[str] = None
+    idempotency_key: Optional[str] = None
+
+
+class RecordedStepUpdate(BaseModel):
+    step_type: Optional[str] = None
+    description: Optional[str] = None
+    locator_strategy: Optional[str] = None
+    locator_value: Optional[str] = None
+    input_value: Optional[str] = None
+    is_sensitive: Optional[bool] = None
+    expected_value: Optional[str] = None
+    checkpoint_instructions: Optional[str] = None
+    needs_review: Optional[bool] = None
+    review_note: Optional[str] = None
+
+
+class RecordedStepReorderRequest(BaseModel):
+    step_ids_in_order: list[int]
+
+
+class RecordingSessionClaimOut(BaseModel):
+    claimed: bool
+    session: Optional[RecordingSessionOut] = None
+    lease_token: Optional[str] = None
+
+
+class RecorderHeartbeatRequest(BaseModel):
+    lease_token: Optional[str] = None  # see RecordedStepCreate.lease_token's note
+    extension_token: Optional[str] = None
+    paused_ack: Optional[bool] = None
+
+
+class SaveAsDraftRequest(BaseModel):
+    revision_label: str
+    change_summary: Optional[str] = None
+
+
+class InsertCheckpointRequest(BaseModel):
+    checkpoint_instructions: str
+
+
+class InsertWaitRequest(BaseModel):
+    duration_ms: int
+
+
+class ExtensionAuthorizationOut(BaseModel):
+    """Raw token shown once, exactly like RunnerTokenOut/refresh tokens.
+    pairing_code bundles backend URL + slug + session id + token into one
+    base64 string so the extension popup needs a single paste instead of
+    four hand-typed fields -- same secret, same lifetime, just packaging."""
+
+    id: int
+    recording_session_id: int
+    token: str
+    pairing_code: str
+    expires_at: datetime
+    hard_cap_at: datetime
+
+
+class ExtensionConnectRequest(BaseModel):
+    extension_token: str
+    target_url: Optional[str] = None
+
+
+class ExtensionHeartbeatRequest(BaseModel):
+    extension_token: str
+
+
+class LocatorTestResultSubmit(BaseModel):
+    """Posted by the runner after evaluating a requested locator test
+    against the still-live recording browser -- the exact same
+    resolveLocator() code path replay uses, so a "tests OK" result here
+    is genuinely proven, not a separate guess."""
+
+    matched_count: int
+    ok: bool
+    message: Optional[str] = None
+    lease_token: Optional[str] = None
+    extension_token: Optional[str] = None
+
+
+# ---------- HYB-4: manual checkpoints and hybrid evidence ----------
+
+
+class WorkflowCheckpointDecisionCreate(BaseModel):
+    workflow_step_id: int
+    status: str  # PASS|FAIL|BLOCKED|NOT_APPLICABLE
+    actual_result_md: Optional[str] = None
+    reason: Optional[str] = None
+    evidence_ids: list[int] = []
+    idempotency_key: Optional[str] = None
+
+
+class WorkflowCheckpointDecisionOut(BaseModel):
+    id: int
+    workflow_run_id: int
+    workflow_step_id: int
+    workflow_step_run_id: Optional[int] = None
+    decision_revision_no: int
+    status: str
+    actual_result_md: Optional[str] = None
+    reason: Optional[str] = None
+    decided_by_user_id: int
+    decided_by_email: str
+    decided_at: datetime
+    source: str
+    resume_authorized: bool
+    review_status: Optional[str] = None
+    reviewed_by: Optional[str] = None
+    reviewed_at: Optional[datetime] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class CheckpointDecisionReviewRequest(BaseModel):
+    review_status: str  # ACCEPTED | CHANGES_REQUESTED
+
+
+class CheckpointContextOut(BaseModel):
+    """Everything the human-checkpoint review UI needs in one call --
+    reuses WorkflowRunDetailOut/WorkflowStepRunOut/RunnerExecutionEventOut
+    rather than duplicating those shapes."""
+
+    run: WorkflowRunDetailOut
+    workflow_step_id: int
+    step_description: Optional[str] = None
+    checkpoint_instructions: Optional[str] = None
+    expected_value: Optional[str] = None
+    workflow_name: Optional[str] = None
+    workflow_revision_label: Optional[str] = None
+    cycle_id: Optional[int] = None
+    linked_test_cases: list[WorkflowTestCaseLinkOut] = []
+    decisions: list[WorkflowCheckpointDecisionOut] = []
+    checkpoint_waiting_since: Optional[datetime] = None
+    elapsed_waiting_seconds: Optional[float] = None
+
+
+class CheckpointResumeRequest(BaseModel):
+    workflow_step_id: int
+    lease_token: str
+
+
+class CheckpointResumeOut(BaseModel):
+    run: WorkflowRunOut
+    steps: list[WorkflowRunClaimStep]
+    decision: WorkflowCheckpointDecisionOut

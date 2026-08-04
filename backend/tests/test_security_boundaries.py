@@ -20,6 +20,11 @@ def test_viewer_can_read_but_not_write(auth_client, project_slug):
         "/api/auth/users", json={"email": "viewer1@example.com", "password": "ViewerPass123!", "role": "VIEWER"}
     )
     assert created.status_code == 200, created.text
+    # ADR-0003: a VIEWER also needs an explicit project-membership grant
+    # to reach this project at all -- this test is about the role
+    # boundary (read vs write), not the access boundary, so grant it here.
+    project_id = auth_client.get(f"/api/projects/{project_slug}").json()["id"]
+    auth_client.post(f"/api/auth/users/{created.json()['id']}/projects", json={"project_id": project_id})
 
     viewer = _fresh_client()
     viewer.headers.update({"Origin": "http://localhost:5173"})
@@ -88,17 +93,155 @@ def test_project_data_is_isolated_by_slug(auth_client):
         assert r.status_code == 404
 
 
+# ---------- Project membership (ADR-0003) ----------
+
+
+def _create_role_user(auth_client, email, password, role):
+    r = auth_client.post("/api/auth/users", json={"email": email, "password": password, "role": role})
+    assert r.status_code == 200, r.text
+    return r.json()["id"]
+
+
+def _login_as(email, password, new_password):
+    # /api/auth/login is rate-limited 5/minute (see test_login_is_rate_limited)
+    # and its in-memory bucket is process-global/keyed by TestClient's shared
+    # fake address -- this file logs in as a fresh user several times, which
+    # would otherwise trip that shared bucket well before the real per-user
+    # limit is the thing under test. Reset immediately before each real
+    # login here, matching the reset already used by
+    # test_login_is_rate_limited once it's done proving the limit exists.
+    from app.rate_limit import limiter
+
+    limiter.reset()
+    c = _fresh_client()
+    c.headers.update({"Origin": "http://localhost:5173"})
+    login = c.post("/api/auth/login", json={"email": email, "password": password})
+    assert login.status_code == 200, login.text
+    c.post("/api/auth/change-password", json={"current_password": password, "new_password": new_password})
+    return c
+
+
+def test_tester_with_no_membership_is_forbidden(auth_client, project_slug):
+    _create_role_user(auth_client, "no-access-tester@example.com", "TesterPass123!", "TESTER")
+    tester = _login_as("no-access-tester@example.com", "TesterPass123!", "TesterPass456!")
+
+    r = tester.get(f"/api/{project_slug}/suites")
+    assert r.status_code == 403, "a TESTER with no ProjectMembership row must be forbidden, not silently allowed"
+
+    r_missing = tester.get("/api/genuinely-nonexistent-project-slug/suites")
+    assert r_missing.status_code == 404, "a nonexistent project must 404 even before the membership check"
+
+
+def test_tester_scoped_to_one_project_cannot_reach_another(auth_client):
+    project_a = auth_client.post("/api/projects", json={"name": "Membership Scope A"}).json()
+    project_b = auth_client.post("/api/projects", json={"name": "Membership Scope B"}).json()
+
+    user_id = _create_role_user(auth_client, "scoped-tester@example.com", "TesterPass123!", "TESTER")
+    grant = auth_client.post(f"/api/auth/users/{user_id}/projects", json={"project_id": project_a["id"]})
+    assert grant.status_code == 200, grant.text
+
+    tester = _login_as("scoped-tester@example.com", "TesterPass123!", "TesterPass456!")
+
+    r_a = tester.get(f"/api/{project_a['slug']}/suites")
+    assert r_a.status_code == 200, "TESTER must reach a project they're a member of"
+
+    r_b = tester.get(f"/api/{project_b['slug']}/suites")
+    assert r_b.status_code == 403, "TESTER must not reach a project they're not a member of"
+
+
+def test_revoking_membership_blocks_further_access_without_relogin(auth_client):
+    project = auth_client.post("/api/projects", json={"name": "Membership Revoke Test"}).json()
+    user_id = _create_role_user(auth_client, "revoke-tester@example.com", "TesterPass123!", "TESTER")
+    auth_client.post(f"/api/auth/users/{user_id}/projects", json={"project_id": project["id"]})
+
+    tester = _login_as("revoke-tester@example.com", "TesterPass123!", "TesterPass456!")
+    assert tester.get(f"/api/{project['slug']}/suites").status_code == 200
+
+    revoke = auth_client.delete(f"/api/auth/users/{user_id}/projects/{project['id']}")
+    assert revoke.status_code == 200
+
+    # Same session/cookie, no re-login — access must already be gone.
+    assert tester.get(f"/api/{project['slug']}/suites").status_code == 403
+
+
+def test_admin_reaches_every_project_without_any_membership_row(auth_client):
+    """ADMIN bypasses ProjectMembership entirely (ADR-0003) — the
+    bootstrap admin account used by `auth_client` has zero membership
+    rows for anything it creates, and must still reach it."""
+    project = auth_client.post("/api/projects", json={"name": "Admin Bypass Test"}).json()
+    r = auth_client.get(f"/api/{project['slug']}/suites")
+    assert r.status_code == 200
+
+
+def test_project_list_is_scoped_by_membership(auth_client):
+    project_visible = auth_client.post("/api/projects", json={"name": "List Scope Visible"}).json()
+    project_hidden = auth_client.post("/api/projects", json={"name": "List Scope Hidden"}).json()
+
+    user_id = _create_role_user(auth_client, "list-scope-tester@example.com", "TesterPass123!", "TESTER")
+    auth_client.post(f"/api/auth/users/{user_id}/projects", json={"project_id": project_visible["id"]})
+
+    tester = _login_as("list-scope-tester@example.com", "TesterPass123!", "TesterPass456!")
+    listed = tester.get("/api/projects").json()
+    listed_slugs = {p["slug"] for p in listed}
+    assert project_visible["slug"] in listed_slugs
+    assert project_hidden["slug"] not in listed_slugs
+
+    admin_listed = {p["slug"] for p in auth_client.get("/api/projects").json()}
+    assert project_visible["slug"] in admin_listed
+    assert project_hidden["slug"] in admin_listed
+
+
+def test_tester_cannot_create_a_project(auth_client):
+    """ADR-0003: project creation is ADMIN-only -- a TESTER's access to
+    any project is always an explicit grant, never implicit from having
+    created it."""
+    user_id = _create_role_user(auth_client, "cannot-create-tester@example.com", "TesterPass123!", "TESTER")
+    tester = _login_as("cannot-create-tester@example.com", "TesterPass123!", "TesterPass456!")
+    r = tester.post("/api/projects", json={"name": "Should Be Rejected"})
+    assert r.status_code == 403
+
+
+def test_runner_fleet_status_is_readable_by_tester_not_just_admin(auth_client):
+    """A TESTER queuing their own run needs to know whether a runner is
+    even online -- unlike GET /api/runner-tokens (ADMIN-only, exposes
+    labels/ids), this aggregate boolean is intentionally readable by
+    any authenticated user, and must never leak per-runner details."""
+    _create_role_user(auth_client, "fleet-status-tester@example.com", "TesterPass123!", "TESTER")
+    tester = _login_as("fleet-status-tester@example.com", "TesterPass123!", "TesterPass456!")
+
+    r = tester.get("/api/runner-tokens/status")
+    assert r.status_code == 200, r.text
+    assert set(r.json().keys()) == {"any_online"}
+    assert isinstance(r.json()["any_online"], bool)
+
+    anon = _fresh_client()
+    assert anon.get("/api/runner-tokens/status").status_code == 401
+
+    # Detailed list stays ADMIN-only regardless.
+    assert tester.get("/api/runner-tokens").status_code == 403
+
+
 # ---------- Rate limiting ----------
 
 
 def test_login_is_rate_limited():
-    """slowapi's 5/minute limit on /api/auth/login (routers/auth.py)."""
+    """slowapi's 5/minute limit on /api/auth/login (routers/auth.py).
+
+    The limiter's in-memory storage is process-global and keyed by
+    remote address — every TestClient in this suite shares the same fake
+    address, so deliberately exhausting the quota here would otherwise
+    poison every other test file's real login calls for the rest of this
+    pytest run (order-dependent flakiness, not a real app defect). Reset
+    it immediately after this test proves the limit exists."""
+    from app.rate_limit import limiter
+
     anon = _fresh_client()
     statuses = []
     for _ in range(7):
         r = anon.post("/api/auth/login", json={"email": "nobody@example.com", "password": "wrong"})
         statuses.append(r.status_code)
     assert 429 in statuses, f"expected a 429 within 7 rapid login attempts, got {statuses}"
+    limiter.reset()
 
 
 # ---------- CORS ----------
@@ -123,6 +266,27 @@ def test_cors_preflight_reflects_only_allowed_origin():
         },
     )
     assert r2.headers.get("access-control-allow-origin") != "https://evil.example.com"
+
+
+def test_local_dev_fallback_port_is_allowed():
+    anon = _fresh_client()
+    r = anon.options(
+        "/api/auth/login",
+        headers={
+            "Origin": "http://localhost:5174",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    assert r.headers.get("access-control-allow-origin") == "http://localhost:5174"
+
+    loopback = anon.options(
+        "/api/auth/login",
+        headers={
+            "Origin": "http://127.0.0.1:5174",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    assert loopback.headers.get("access-control-allow-origin") == "http://127.0.0.1:5174"
 
 
 # ---------- CSRF (Origin check on cookie-authenticated writes) ----------

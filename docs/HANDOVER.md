@@ -87,9 +87,10 @@ entities that don't exist yet.
 
 | Limitation | Status | Where documented |
 |---|---|---|
-| Real Cloudflare R2 staging smoke test | **Not executed** — no credentials in dev environment | `docs/RELEASE_CHECKLIST.md` |
-| Screen Capture API / clipboard-paste | Implemented, real-browser acceptance evidence not collected (headless-incompatible) | `docs/THREAT_MODEL.md` §10 |
-| Hybrid execution beyond HYB-0 | Disabled by design, not a bug | `docs/ROADMAP.md` Track B |
+| Real Cloudflare R2 staging smoke test | **Done** — passed 2026-08-02, human operator | `docs/RELEASE_CHECKLIST.md`, `docs/RELEASE_REHEARSAL.md` |
+| Screen Capture API / clipboard-paste | Implemented, real-browser acceptance evidence not yet collected (headless-incompatible, needs a human operator) — **still blocks production release** | `docs/RELEASE_CHECKLIST.md`, `docs/THREAT_MODEL.md` §10 |
+| Hybrid execution (Track B, HYB-0–HYB-5) | **Complete** — see `docs/ROADMAP.md` Track B and `docs/hybrid/HYBRID_GUIDES.md` | `docs/ROADMAP.md` |
+| RunnerToken global (not per-project) scope | **Accepted for internal MVP only**, under documented controls — not suitable for public multi-tenant deployment | `docs/HYBRID_RUNNER_THREAT_MODEL.md` §4, this section below |
 | Hard delete / evidence purge | Deliberately not built | `docs/EVIDENCE_STORAGE_LIFECYCLE.md` |
 | Markdown (SATL-style) test-script importer | Deferred — no fixture document in this workspace | `docs/ROADMAP.md` Phase 3 |
 | User management UI | API-only, no frontend screen | `docs/guides/ADMIN_GUIDE.md` |
@@ -97,6 +98,39 @@ entities that don't exist yet.
 | Backups | Script exists (`scripts/backup_databases.py`), not scheduled/automated | `docs/BACKUP_RESTORE.md` |
 | Orphan reconciliation | Script exists, not scheduled — manual/periodic | `docs/EVIDENCE_STORAGE_LIFECYCLE.md` |
 | Streaming export for very large cycles | Not built — in-memory generation has a documented comfortable ceiling | `docs/CAPACITY.md` |
+
+### RunnerToken internal-MVP release decision (2026-08-02)
+
+`RunnerToken` (the hybrid runner's execution credential) is a global,
+not per-project, credential — see
+`docs/HYBRID_RUNNER_THREAT_MODEL.md` §4 for the full technical
+reasoning (it has always matched the same no-per-project-membership
+trust model every human user already has in this app).
+
+**Release decision**: this is **temporarily accepted for INTERNAL MVP
+DEPLOYMENT ONLY**, under these controls:
+
+- Deployment is restricted to trusted internal users only.
+- The runner token is stored only as a deployment secret (e.g. `fly
+  secrets set` or the runner host's own protected environment) — never
+  in frontend code, logs, documentation, or source control.
+- Runner registration and revocation (`POST /api/runner-tokens`, `PUT
+  .../revoke`) are operational and exercised — see
+  `docs/hybrid/RUNNER_CREDENTIAL_ROTATION.md`.
+- The credential-rotation procedure has been verified (see that same
+  document).
+- Only approved, known runner machines receive credentials — token
+  distribution is a manual, deliberate act by an ADMIN, not
+  self-service.
+- **A post-MVP backlog item exists**: project/environment-scoped
+  runner credentials (adding a `project_id` to `RunnerToken` and
+  enforcing it on every runner-authenticated endpoint) — not
+  implemented, tracked as future work, not silently deferred without a
+  record.
+- **Public or customer-facing multi-tenant deployment remains blocked**
+  until that project-scoping work exists. Do not describe the current
+  global-token model as suitable for that use case under any
+  circumstances.
 
 ## 5. Operational tasks a new operator needs to know about
 

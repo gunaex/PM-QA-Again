@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "QA-Again Recorder",
+  "version": "1.0.0",
+  "description": "Records and replays QA-Again workflows in the tester-selected browser tab.",
+  "permissions": ["activeTab", "scripting", "storage"],
+  "host_permissions": [],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "QA-Again Recorder"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  }
+}

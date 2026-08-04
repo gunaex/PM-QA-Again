@@ -13,13 +13,14 @@ Package"). Built entirely server-side and in-memory:
   package.
 """
 
+import hashlib
 import io
 import json
 import re
 import zipfile
 from datetime import datetime, timezone
 
-from . import models
+from . import models, hybrid_timing
 from .report_excel import build_workbook, workbook_to_bytes, evidence_code
 from .storage import EvidenceStorage
 
@@ -91,15 +92,35 @@ def build_evidence_package(
             filename = f"{test_id}_{evidence_code(item.id)}.{ext}"
 
             missing = False
+            checksum_verified = None
             try:
                 content = storage.get(item.object_key)
             except Exception:
                 missing = True
                 content = None
 
+            if content is not None:
+                # Requirement: verify every included file against its
+                # checksum before trusting it into the archive -- a
+                # corrupted/tampered object is treated the same as a
+                # missing one (excluded, flagged), never silently packaged.
+                actual_sha256 = hashlib.sha256(content).hexdigest()
+                checksum_verified = actual_sha256 == item.original_sha256
+                if not checksum_verified:
+                    missing = True
+                    content = None
+
             archive_path = f"evidence/{filename}"
             if content is not None:
                 zf.writestr(archive_path, content)
+
+            defect = (
+                db.query(models.Defect)
+                .filter(models.Defect.cycle_test_result_id == item.cycle_test_result_id)
+                .first()
+                if item.cycle_test_result_id
+                else None
+            )
 
             manifest_evidence.append(
                 {
@@ -110,12 +131,19 @@ def build_evidence_package(
                     # match, no prefix-guessing required by a consumer.
                     "filename": archive_path if not missing else None,
                     "sha256": item.original_sha256,
+                    "checksum_verified": checksum_verified,
                     "size_bytes": item.original_size_bytes,
                     "status": item.status,
                     "captured_by": item.captured_by,
                     "captured_at": item.captured_at.isoformat() if item.captured_at else None,
                     "annotation_revision": item.current_revision_no,
                     "missing": missing,
+                    # HYB-5: hybrid provenance links -- null for every
+                    # Track A (tester-uploaded) evidence row.
+                    "workflow_run_id": item.workflow_run_id,
+                    "workflow_step_run_id": item.workflow_step_run_id,
+                    "checkpoint_decision_id": item.checkpoint_decision_id,
+                    "defect_key": defect.defect_key if defect else None,
                 }
             )
 
@@ -131,7 +159,88 @@ def build_evidence_package(
                 "status": cycle.status,
             },
             "evidence": manifest_evidence,
+            "hybrid": _build_hybrid_manifest_section(db, cycle),
         }
-        zf.writestr("manifest.json", json.dumps(manifest, indent=2))
+        # default=str: hybrid_timing.run_timing embeds raw datetime objects
+        # (run_created_at/started_at/ended_at on runs, steps, checkpoints,
+        # evidence uploads) -- json.dumps can't serialize those natively.
+        zf.writestr("manifest.json", json.dumps(manifest, indent=2, default=str))
 
     return zip_buf.getvalue(), f"{package_slug}_evidence_package.zip"
+
+
+def _build_hybrid_manifest_section(db, cycle: models.TestCycle) -> dict:
+    """Machine-readable links for every hybrid entity reachable from this
+    cycle: workflow definition -> revision -> step -> run -> step run ->
+    runner -> checkpoint -> human decision, with timestamps/durations.
+    Never substitutes for the evidence bytes above -- this is metadata
+    only, cross-referenced by id against the `evidence` list's own
+    workflow_run_id/workflow_step_run_id/checkpoint_decision_id fields."""
+    result_ids = [r.id for r in db.query(models.CycleTestResult.id).filter(models.CycleTestResult.cycle_id == cycle.id).all()]
+    runs = (
+        db.query(models.WorkflowRun).filter(models.WorkflowRun.cycle_test_result_id.in_(result_ids) if result_ids else False).all()
+    )
+    run_ids = [r.id for r in runs]
+    revision_ids = sorted({r.workflow_revision_id for r in runs})
+    revisions = db.query(models.WorkflowRevision).filter(models.WorkflowRevision.id.in_(revision_ids)).all() if revision_ids else []
+    workflow_ids = sorted({r.workflow_id for r in revisions})
+    workflows = db.query(models.WorkflowDefinition).filter(models.WorkflowDefinition.id.in_(workflow_ids)).all() if workflow_ids else []
+    steps = db.query(models.WorkflowStep).filter(models.WorkflowStep.revision_id.in_(revision_ids)).all() if revision_ids else []
+    step_runs = db.query(models.WorkflowStepRun).filter(models.WorkflowStepRun.workflow_run_id.in_(run_ids)).all() if run_ids else []
+    decisions = db.query(models.WorkflowCheckpointDecision).filter(models.WorkflowCheckpointDecision.workflow_run_id.in_(run_ids)).all() if run_ids else []
+
+    def iso(dt):
+        return dt.isoformat() if dt else None
+
+    return {
+        "workflows": [{"id": w.id, "name": w.name, "status": w.status} for w in workflows],
+        "workflow_revisions": [
+            {"id": r.id, "workflow_id": r.workflow_id, "revision_label": r.revision_label, "status": r.status, "published_at": iso(r.published_at)}
+            for r in revisions
+        ],
+        "workflow_steps": [
+            {"id": s.id, "revision_id": s.revision_id, "sequence_no": s.sequence_no, "step_type": s.step_type, "description": s.description}
+            for s in steps
+        ],
+        "workflow_runs": [
+            {
+                "id": r.id,
+                "workflow_revision_id": r.workflow_revision_id,
+                "cycle_test_result_id": r.cycle_test_result_id,
+                "runner_id": r.runner_id,
+                "status": r.status,
+                "created_at": iso(r.created_at),
+                "started_at": iso(r.started_at),
+                "ended_at": iso(r.ended_at),
+                "timing": hybrid_timing.run_timing(db, r),
+            }
+            for r in runs
+        ],
+        "workflow_step_runs": [
+            {
+                "id": sr.id,
+                "workflow_run_id": sr.workflow_run_id,
+                "workflow_step_id": sr.workflow_step_id,
+                "attempt_number": sr.attempt_number,
+                "status": sr.status,
+                "failure_category": sr.failure_category,
+                "duration_ms": sr.duration_ms,
+                "started_at": iso(sr.started_at),
+                "ended_at": iso(sr.ended_at),
+            }
+            for sr in step_runs
+        ],
+        "checkpoint_decisions": [
+            {
+                "id": d.id,
+                "workflow_run_id": d.workflow_run_id,
+                "workflow_step_id": d.workflow_step_id,
+                "status": d.status,
+                "decided_by_email": d.decided_by_email,
+                "decided_at": iso(d.decided_at),
+                "source": d.source,
+                "resume_authorized": d.resume_authorized,
+            }
+            for d in decisions
+        ],
+    }
