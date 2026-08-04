@@ -175,24 +175,24 @@ export const createAnnotation = (slug, cycleId, resultId, evidenceId, payload) =
 export const getDashboard = (slug) => api.get(`/${slug}/dashboard`).then((r) => r.data)
 
 // Reports
-export const getExecutionSummary = (slug, cycleId) =>
-  api.get(`/${slug}/reports/execution-summary`, { params: { cycle_id: cycleId } }).then((r) => r.data)
+export const getExecutionSummary = (slug, cycleId, dateParams = {}) =>
+  api.get(`/${slug}/reports/execution-summary`, { params: { cycle_id: cycleId, ...dateParams } }).then((r) => r.data)
 export const getDetailedResults = (slug, cycleId, filters = {}) =>
   api.get(`/${slug}/reports/detailed-results`, { params: { cycle_id: cycleId, ...filters } }).then((r) => r.data)
-export const getNgDefects = (slug, cycleId) =>
-  api.get(`/${slug}/reports/ng-defects`, { params: { cycle_id: cycleId } }).then((r) => r.data)
-export const getEvidenceCompletenessReport = (slug, cycleId) =>
-  api.get(`/${slug}/reports/evidence-completeness`, { params: { cycle_id: cycleId } }).then((r) => r.data)
+export const getNgDefects = (slug, cycleId, dateParams = {}) =>
+  api.get(`/${slug}/reports/ng-defects`, { params: { cycle_id: cycleId, ...dateParams } }).then((r) => r.data)
+export const getEvidenceCompletenessReport = (slug, cycleId, dateParams = {}) =>
+  api.get(`/${slug}/reports/evidence-completeness`, { params: { cycle_id: cycleId, ...dateParams } }).then((r) => r.data)
 export const getRevisionComparison = (slug, revisionAId, revisionBId) =>
   api.get(`/${slug}/reports/revision-comparison`, { params: { revision_a_id: revisionAId, revision_b_id: revisionBId } }).then((r) => r.data)
 export const getCycleComparison = (slug, cycleAId, cycleBId) =>
   api.get(`/${slug}/reports/cycle-comparison`, { params: { cycle_a_id: cycleAId, cycle_b_id: cycleBId } }).then((r) => r.data)
-export const getTesterProgress = (slug, cycleId) =>
-  api.get(`/${slug}/reports/tester-progress`, { params: { cycle_id: cycleId } }).then((r) => r.data)
-export const getGoLiveReadinessReport = (slug, cycleId) =>
-  api.get(`/${slug}/reports/go-live-readiness`, { params: { cycle_id: cycleId } }).then((r) => r.data)
-export const getSignoffSummary = (slug, cycleId) =>
-  api.get(`/${slug}/reports/signoff-summary`, { params: { cycle_id: cycleId } }).then((r) => r.data)
+export const getTesterProgress = (slug, cycleId, dateParams = {}) =>
+  api.get(`/${slug}/reports/tester-progress`, { params: { cycle_id: cycleId, ...dateParams } }).then((r) => r.data)
+export const getGoLiveReadinessReport = (slug, cycleId, dateParams = {}) =>
+  api.get(`/${slug}/reports/go-live-readiness`, { params: { cycle_id: cycleId, ...dateParams } }).then((r) => r.data)
+export const getSignoffSummary = (slug, cycleId, dateParams = {}) =>
+  api.get(`/${slug}/reports/signoff-summary`, { params: { cycle_id: cycleId, ...dateParams } }).then((r) => r.data)
 export const getStorageUsageReport = (slug) => api.get(`/${slug}/reports/storage-usage`).then((r) => r.data)
 
 // Hybrid dashboard/reports/timing (HYB-5) — never touches the Track A

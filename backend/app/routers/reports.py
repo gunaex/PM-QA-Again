@@ -1,5 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
+from datetime import date, datetime
 
 from .. import models
 from ..database import get_project_db, get_master_db
@@ -14,6 +15,15 @@ router = APIRouter(prefix="/api/{slug}/reports", tags=["reports"], dependencies=
 # detection — same fields already used by the case-editor's own hashing.
 
 
+def _apply_date_filter(query, model, date_from, date_to):
+    """Apply optional date range filter on model.executed_at."""
+    if date_from:
+        query = query.filter(model.executed_at >= datetime.combine(date_from, datetime.min.time()))
+    if date_to:
+        query = query.filter(model.executed_at <= datetime.combine(date_to, datetime.max.time()))
+    return query
+
+
 def _get_cycle(db: Session, cycle_id: int) -> models.TestCycle:
     cycle = db.query(models.TestCycle).filter(models.TestCycle.id == cycle_id).first()
     if not cycle:
@@ -25,13 +35,19 @@ def _get_cycle(db: Session, cycle_id: int) -> models.TestCycle:
 
 
 @router.get("/execution-summary")
-def execution_summary(slug: str, cycle_id: int, db: Session = Depends(get_project_db)):
+def execution_summary(
+    slug: str,
+    cycle_id: int,
+    date_from: date | None = Query(None, description="Start date (YYYY-MM-DD)"),
+    date_to: date | None = Query(None, description="End date (YYYY-MM-DD)"),
+    db: Session = Depends(get_project_db),
+):
     cycle = _get_cycle(db, cycle_id)
-    counts = result_counts(db, cycle_id)
+    counts = result_counts(db, cycle_id, date_from=date_from, date_to=date_to)
     return {
         "cycle": {"id": cycle.id, "name": cycle.name, "status": cycle.status, "environment": cycle.environment},
         "result_counts": counts,
-        "pass_rate": pass_rate(db, cycle_id, counts=counts),
+        "pass_rate": pass_rate(db, cycle_id, counts=counts, date_from=date_from, date_to=date_to),
         "evidence_completeness": evidence_completeness(db, cycle_id),
     }
 
@@ -46,6 +62,8 @@ def detailed_results(
     status: str | None = None,
     tester: str | None = None,
     checkpoint_code: str | None = None,
+    date_from: date | None = Query(None, description="Start date (YYYY-MM-DD)"),
+    date_to: date | None = Query(None, description="End date (YYYY-MM-DD)"),
     db: Session = Depends(get_project_db),
 ):
     _get_cycle(db, cycle_id)
@@ -54,6 +72,7 @@ def detailed_results(
         .join(models.TestCase, models.TestCase.id == models.CycleTestResult.test_case_id)
         .filter(models.CycleTestResult.cycle_id == cycle_id)
     )
+    q = _apply_date_filter(q, models.CycleTestResult, date_from, date_to)
     if status:
         q = q.filter(models.CycleTestResult.status == status)
     if tester:
@@ -89,14 +108,21 @@ def detailed_results(
 
 
 @router.get("/ng-defects")
-def ng_defects(slug: str, cycle_id: int, db: Session = Depends(get_project_db)):
+def ng_defects(
+    slug: str,
+    cycle_id: int,
+    date_from: date | None = Query(None, description="Start date (YYYY-MM-DD)"),
+    date_to: date | None = Query(None, description="End date (YYYY-MM-DD)"),
+    db: Session = Depends(get_project_db),
+):
     _get_cycle(db, cycle_id)
-    ng_cases = (
+    ng_q = (
         db.query(models.CycleTestResult, models.TestCase)
         .join(models.TestCase, models.TestCase.id == models.CycleTestResult.test_case_id)
         .filter(models.CycleTestResult.cycle_id == cycle_id, models.CycleTestResult.status == "FAIL")
-        .all()
     )
+    ng_q = _apply_date_filter(ng_q, models.CycleTestResult, date_from, date_to)
+    ng_cases = ng_q.all()
     defects = db.query(models.Defect).filter(models.Defect.cycle_id == cycle_id).all()
     return {
         "ng_cases": [
@@ -191,13 +217,20 @@ def cycle_comparison(slug: str, cycle_a_id: int, cycle_b_id: int, db: Session = 
 
 
 @router.get("/tester-progress")
-def tester_progress(slug: str, cycle_id: int, db: Session = Depends(get_project_db)):
+def tester_progress(
+    slug: str,
+    cycle_id: int,
+    date_from: date | None = Query(None, description="Start date (YYYY-MM-DD)"),
+    date_to: date | None = Query(None, description="End date (YYYY-MM-DD)"),
+    db: Session = Depends(get_project_db),
+):
     _get_cycle(db, cycle_id)
-    rows = (
+    q = (
         db.query(models.CycleTestResult.executed_by, models.CycleTestResult.status, models.CycleTestResult.id)
         .filter(models.CycleTestResult.cycle_id == cycle_id, models.CycleTestResult.executed_by.isnot(None))
-        .all()
     )
+    q = _apply_date_filter(q, models.CycleTestResult, date_from, date_to)
+    rows = q.all()
     by_tester: dict[str, dict[str, int]] = {}
     for executed_by, status, _id in rows:
         by_tester.setdefault(executed_by, {s: 0 for s in models.RESULT_STATUSES})

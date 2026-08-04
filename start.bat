@@ -44,11 +44,11 @@ if not exist "%ROOT%frontend\node_modules" (
     popd
 )
 
-echo Starting backend on http://127.0.0.1:8000 ...
+echo Starting backend on http://127.0.0.1:8001 ...
 echo (First run against an empty database: watch this window for a
 echo  one-time generated admin password, unless you set ADMIN_EMAIL /
 echo  ADMIN_PASSWORD yourself before running this script.)
-start "QA-Again Backend" cmd /k "cd /d %ROOT%backend && set ALLOWED_ORIGINS=%ALLOWED_ORIGINS%&& set ALLOW_LOCAL_DEV_ORIGINS=%ALLOW_LOCAL_DEV_ORIGINS%&& set JWT_SECRET_KEY=%JWT_SECRET_KEY%&& .venv\Scripts\python -m uvicorn app.main:app --host 127.0.0.1 --port 8000"
+start "QA-Again Backend" cmd /k "cd /d %ROOT%backend && set ALLOWED_ORIGINS=%ALLOWED_ORIGINS%&& set ALLOW_LOCAL_DEV_ORIGINS=%ALLOW_LOCAL_DEV_ORIGINS%&& set JWT_SECRET_KEY=%JWT_SECRET_KEY%&& .venv\Scripts\python -m uvicorn app.main:app --host 127.0.0.1 --port 8001"
 
 echo Starting frontend on http://localhost:5173 ...
 start "QA-Again Frontend" cmd /k "cd /d %ROOT%frontend && npm run dev"
